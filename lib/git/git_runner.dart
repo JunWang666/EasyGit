@@ -25,6 +25,10 @@ class GitRunner {
   final String workDir;
   void Function(GitCommandLog log)? onLog;
 
+  /// Credentials for this runner only, in place of [credentials]. Set when a
+  /// repository is bound to one account (see `RepoController.pushAccountId`).
+  List<GitCredential>? credentialOverride;
+
   /// Path or name of the git executable.
   static String executable = 'git';
 
@@ -41,7 +45,8 @@ class GitRunner {
 
   /// Adds a credential helper per signed-in server. The secrets travel in
   /// environment variables, so they never appear on the command line.
-  static (List<String>, Map<String, String>) _credentialArgs(List<String> args) {
+  static (List<String>, Map<String, String>) _credentialArgs(
+      List<String> args, List<GitCredential> credentials) {
     if (credentials.isEmpty || args.isEmpty || !_networkCommands.contains(args.first)) {
       return (const [], const {});
     }
@@ -84,7 +89,8 @@ class GitRunner {
       throw GitException(command,
           'The git command line is not available on this platform.', -1);
     }
-    final (credentialConfig, credentialEnv) = _credentialArgs(args);
+    final (credentialConfig, credentialEnv) =
+        _credentialArgs(args, credentialOverride ?? credentials);
     final Process process;
     try {
       process = await Process.start(

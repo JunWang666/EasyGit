@@ -7,6 +7,21 @@ import 'models.dart';
 
 enum ResetMode { soft, mixed, hard, keep }
 
+/// Commit author settings of a repository.
+class RepoIdentity {
+  const RepoIdentity({this.localName, this.localEmail, this.globalName, this.globalEmail});
+
+  /// Set in the repository's own config; null when it uses the global one.
+  final String? localName;
+  final String? localEmail;
+  final String? globalName;
+  final String? globalEmail;
+
+  bool get hasLocal => localName != null || localEmail != null;
+  String? get name => localName ?? globalName;
+  String? get email => localEmail ?? globalEmail;
+}
+
 /// High-level git operations on one repository.
 class GitRepository {
   GitRepository._(this.root, this.gitDir, this._git);
@@ -20,8 +35,10 @@ class GitRepository {
 
   set onLog(void Function(GitCommandLog log)? callback) => _git.onLog = callback;
 
-  String get name =>
-      root.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).lastOrNull ?? root;
+  /// HTTPS credentials for this repository only (null: all signed-in accounts).
+  set credentialOverride(List<GitCredential>? value) => _git.credentialOverride = value;
+
+  String get name => root.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).lastOrNull ?? root;
 
   /// Opens the repository that contains [dir].
   static Future<GitRepository> open(String dir) async {
@@ -38,8 +55,8 @@ class GitRepository {
   // ---------------------------------------------------------------- status
 
   Future<RepoStatus> status() async {
-    final out = await _git.run(
-        ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all']);
+    final out =
+        await _git.run(['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all']);
     final parts = out.split('\x00');
     String? branch;
     String? oid;
@@ -82,8 +99,8 @@ class GitRepository {
         final f = _splitFields(line, 10);
         changes.add(FileChange(path: f.rest, kind: ChangeKind.conflicted, unstaged: true));
       } else if (type == '?') {
-        changes.add(FileChange(
-            path: line.substring(2), kind: ChangeKind.untracked, unstaged: true));
+        changes
+            .add(FileChange(path: line.substring(2), kind: ChangeKind.untracked, unstaged: true));
       }
     }
     changes.sort((a, b) => a.path.compareTo(b.path));
@@ -362,8 +379,8 @@ class GitRepository {
       final letter = s[0];
       if (letter == 'R' || letter == 'C') {
         if (i + 2 >= p.length) break;
-        result.add(FileChange(
-            path: p[i + 2], oldPath: p[i + 1], kind: changeKindFromLetter(letter)));
+        result
+            .add(FileChange(path: p[i + 2], oldPath: p[i + 1], kind: changeKindFromLetter(letter)));
         i += 3;
       } else {
         if (i + 1 >= p.length) break;
@@ -393,14 +410,16 @@ class GitRepository {
     return const Utf8Decoder(allowMalformed: true).convert(bytes);
   }
 
-  Future<String> lastCommitMessage() async =>
-      (await _git.run(['log', '-1', '--format=%B'])).trim();
+  Future<String> lastCommitMessage() async => (await _git.run(['log', '-1', '--format=%B'])).trim();
 
   // ---------------------------------------------------------------- local changes
 
   /// Commits exactly [files] (like the IDE's commit dialog: no staging area).
   Future<void> commit(String message, List<FileChange> files, {bool amend = false}) async {
-    final untracked = [for (final f in files) if (f.isUntracked) f.path];
+    final untracked = [
+      for (final f in files)
+        if (f.isUntracked) f.path
+    ];
     if (untracked.isNotEmpty) await _git.run(['add', '--', ...untracked], log: true);
     final paths = <String>{
       for (final f in files) ...[f.path, if (f.oldPath != null) f.oldPath!],
@@ -437,17 +456,19 @@ class GitRepository {
       await _git.run(['rm', '--cached', '--quiet', '-r', '--', ...unstage], log: true);
     }
     if (restore.isNotEmpty) {
-      await _git.run(
-          ['restore', '--source=HEAD', '--staged', '--worktree', '--', ...restore],
-          log: true);
+      await _git
+          .run(['restore', '--source=HEAD', '--staged', '--worktree', '--', ...restore], log: true);
     }
   }
 
   Future<void> addToVcs(List<String> paths) => _git.run(['add', '--', ...paths], log: true);
 
-  Future<void> stash(String message) =>
-      _git.run(['stash', 'push', '--include-untracked', if (message.isNotEmpty) ...['-m', message]],
-          log: true);
+  Future<void> stash(String message) => _git.run([
+        'stash',
+        'push',
+        '--include-untracked',
+        if (message.isNotEmpty) ...['-m', message]
+      ], log: true);
 
   Future<void> stashPop([String? ref]) =>
       _git.run(['stash', 'pop', if (ref != null) ref], log: true);
@@ -568,12 +589,57 @@ class GitRepository {
     return all.contains('origin') ? 'origin' : all.first;
   }
 
+  // ---------------------------------------------------------------- identity
+
+  Future<String?> _config(List<String> scope, String key) async {
+    try {
+      final v = (await _git.run(['config', ...scope, '--get', key])).trim();
+      return v.isEmpty ? null : v;
+    } on GitException {
+      return null; // exit 1: not set
+    }
+  }
+
+  Future<void> _setConfig(String key, String? value) async {
+    if (value != null && value.trim().isNotEmpty) {
+      await _git.run(['config', '--local', key, value.trim()], log: true);
+      return;
+    }
+    try {
+      await _git.run(['config', '--local', '--unset', key], log: true);
+    } on GitException catch (e) {
+      if (e.exitCode != 5) rethrow; // 5: the key was not set
+    }
+  }
+
+  /// Author identity set for this repository, and the one it falls back to.
+  Future<RepoIdentity> identity() async => RepoIdentity(
+        localName: await _config(['--local'], 'user.name'),
+        localEmail: await _config(['--local'], 'user.email'),
+        globalName:
+            await _config(['--global'], 'user.name') ?? await _config(['--system'], 'user.name'),
+        globalEmail:
+            await _config(['--global'], 'user.email') ?? await _config(['--system'], 'user.email'),
+      );
+
+  /// Sets the author identity for this repository; null or empty values fall
+  /// back to the global identity.
+  Future<void> setLocalIdentity(String? name, String? email) async {
+    await _setConfig('user.name', name);
+    await _setConfig('user.email', email);
+  }
+
+  /// Id of the EasyGit account this repository fetches and pushes with.
+  /// Kept in the repository's own config; git ignores the key.
+  Future<String?> accountId() => _config(['--local'], 'easygit.account');
+
+  Future<void> setAccountId(String? id) => _setConfig('easygit.account', id);
+
   // ---------------------------------------------------------------- branches
 
   Future<void> checkout(String ref) => _git.run(['checkout', ref], log: true);
 
-  Future<void> checkoutRevision(String rev) =>
-      _git.run(['checkout', '--detach', rev], log: true);
+  Future<void> checkoutRevision(String rev) => _git.run(['checkout', '--detach', rev], log: true);
 
   /// Checks out a remote branch, creating a tracking local branch if needed.
   Future<void> checkoutRemote(GitRef remote, List<GitRef> all) async {
@@ -706,8 +772,8 @@ class GitRepository {
   Future<Set<String>> lfsTrackedPaths(Iterable<String> paths) async {
     final list = paths.toList();
     if (list.isEmpty) return const {};
-    final out = await _git.run(['check-attr', '-z', '--stdin', 'filter'],
-        stdin: '${list.join('\x00')}\x00');
+    final out = await _git
+        .run(['check-attr', '-z', '--stdin', 'filter'], stdin: '${list.join('\x00')}\x00');
     return {
       for (final e in parseCheckAttrZ(out).entries)
         if (e.value['filter'] == 'lfs') e.key,

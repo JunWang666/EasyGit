@@ -8,13 +8,20 @@ import '../../net/network.dart';
 import '../../state/repos_state.dart';
 import '../../theme/ide_theme.dart';
 import '../widgets/common.dart';
-import '../widgets/dialogs.dart';
 
-/// Settings > Network: how git, git-lfs and EasyGit reach servers.
-Future<void> showNetworkDialog(BuildContext context, ReposState repos) => showDialog<void>(
-      context: context,
-      builder: (context) => _NetworkDialog(repos: repos),
-    );
+class _RuleFields {
+  _RuleFields(String host, String proxy)
+      : host = TextEditingController(text: host),
+        proxy = TextEditingController(text: proxy);
+
+  final TextEditingController host;
+  final TextEditingController proxy;
+
+  void dispose() {
+    host.dispose();
+    proxy.dispose();
+  }
+}
 
 class _TestResult {
   const _TestResult(this.label, this.ok, this.detail);
@@ -24,16 +31,17 @@ class _TestResult {
   final String detail;
 }
 
-class _NetworkDialog extends StatefulWidget {
-  const _NetworkDialog({required this.repos});
+/// Settings > Network & Proxy: how git, git-lfs and EasyGit reach servers.
+class NetworkSettingsPanel extends StatefulWidget {
+  const NetworkSettingsPanel({super.key, required this.repos});
 
   final ReposState repos;
 
   @override
-  State<_NetworkDialog> createState() => _NetworkDialogState();
+  State<NetworkSettingsPanel> createState() => _NetworkSettingsPanelState();
 }
 
-class _NetworkDialogState extends State<_NetworkDialog> {
+class _NetworkSettingsPanelState extends State<NetworkSettingsPanel> {
   NetworkSettings get net => widget.repos.network;
 
   late var _mode = net.mode;
@@ -42,7 +50,9 @@ class _NetworkDialogState extends State<_NetworkDialog> {
   final _password = TextEditingController();
   late final _bypass = TextEditingController(text: net.bypass);
   late var _bypassSelfHosted = net.bypassSelfHosted;
+  late final _rules = [for (final r in net.rules) _RuleFields(r.host, r.proxy)];
   var _testing = false;
+  var _saved = false;
   List<_TestResult>? _results;
 
   @override
@@ -59,10 +69,14 @@ class _NetworkDialogState extends State<_NetworkDialog> {
     _user.dispose();
     _password.dispose();
     _bypass.dispose();
+    for (final r in _rules) {
+      r.dispose();
+    }
     super.dispose();
   }
 
   Future<void> _apply() => net.save(
+        rules: [for (final r in _rules) ProxyRule(r.host.text, r.proxy.text)],
         mode: _mode,
         manualUrl: normalizeProxyUrl(_url.text),
         username: _user.text,
@@ -137,151 +151,200 @@ class _NetworkDialogState extends State<_NetworkDialog> {
           ProxyMode.none => 'Connect directly, even if your gitconfig sets a proxy.',
         };
 
-    return IdeDialog(
-      title: 'Network & Proxy',
-      width: 600,
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Applies to fetch, pull, push and clone, to Git LFS transfers, and to EasyGit\'s '
-              'requests to GitHub, GitLab and Gitea. Your global gitconfig is never changed.',
-              style: TextStyle(color: c.textSecondary),
-            ),
-            const SizedBox(height: 12),
-            for (final m in ProxyMode.values)
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => setState(() => _mode = m),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 5),
-                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Icon(_mode == m ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                        size: 16, color: _mode == m ? c.accent : c.buttonBorder),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(m.label),
-                        Text(describe(m), style: Theme.of(context).textTheme.bodySmall),
-                      ]),
-                    ),
-                  ]),
-                ),
-              ),
-            if (_mode == ProxyMode.manual) ...[
-              const SizedBox(height: 8),
-              _label('Proxy address'),
-              IdeTextField(
-                controller: _url,
-                hint: 'http://127.0.0.1:7890',
-                onChanged: (_) => setState(() {}),
-              ),
-              const SizedBox(height: 8),
-              Row(children: [
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    _label('Username (optional)'),
-                    IdeTextField(controller: _user),
-                  ]),
-                ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Applies to fetch, pull, push and clone, to Git LFS transfers, and to EasyGit\'s '
+          'requests to GitHub, GitLab and Gitea. Your global gitconfig is never changed.',
+          style: TextStyle(color: c.textSecondary),
+        ),
+        const SizedBox(height: 12),
+        for (final m in ProxyMode.values)
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => setState(() => _mode = m),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(_mode == m ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                    size: 16, color: _mode == m ? c.accent : c.buttonBorder),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    _label(net.hasPassword ? 'Password (saved; type to change)' : 'Password'),
-                    _PasswordField(controller: _password),
+                    Text(m.label),
+                    Text(describe(m), style: Theme.of(context).textTheme.bodySmall),
                   ]),
                 ),
               ]),
-            ],
-            if (_mode == ProxyMode.manual || _mode == ProxyMode.system) ...[
-              const SizedBox(height: 10),
-              _label('Connect directly to (NO_PROXY)'),
-              IdeTextField(controller: _bypass, hint: 'localhost,127.0.0.1,.corp.example.com'),
-              const SizedBox(height: 6),
-              GestureDetector(
-                onTap: () => setState(() => _bypassSelfHosted = !_bypassSelfHosted),
-                child: Row(children: [
-                  SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: Checkbox(
-                      value: _bypassSelfHosted,
-                      activeColor: c.accent,
-                      onChanged: (v) => setState(() => _bypassSelfHosted = v ?? false),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      'Connect directly to my self-hosted servers'
-                      '${net.selfHostedHosts.isEmpty ? '' : ' (${net.selfHostedHosts.join(', ')})'}',
-                    ),
-                  ),
-                ]),
-              ),
-            ],
-            if (socks) ...[
-              const SizedBox(height: 10),
-              Text(
-                'Git and Git LFS use the SOCKS proxy. EasyGit\'s own requests (account repository '
-                'lists, LFS server test) cannot use SOCKS and connect directly. Use an HTTP or '
-                '"mixed" port to cover them too.',
-                style: TextStyle(fontSize: 12, color: c.warning),
-              ),
-            ],
-            if (_results != null || _testing) ...[
-              const SizedBox(height: 14),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: c.editorBg,
-                  border: Border.all(color: c.border),
-                  borderRadius: BorderRadius.circular(6),
+            ),
+          ),
+        if (_mode == ProxyMode.manual) ...[
+          const SizedBox(height: 8),
+          _label('Proxy address'),
+          IdeTextField(
+            controller: _url,
+            hint: 'http://127.0.0.1:7890',
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                _label('Username (optional)'),
+                IdeTextField(controller: _user),
+              ]),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                _label(net.hasPassword ? 'Password (saved; type to change)' : 'Password'),
+                _PasswordField(controller: _password),
+              ]),
+            ),
+          ]),
+        ],
+        if (_mode == ProxyMode.manual || _mode == ProxyMode.system) ...[
+          const SizedBox(height: 10),
+          _label('Connect directly to (NO_PROXY)'),
+          IdeTextField(controller: _bypass, hint: 'localhost,127.0.0.1,.corp.example.com'),
+          const SizedBox(height: 6),
+          GestureDetector(
+            onTap: () => setState(() => _bypassSelfHosted = !_bypassSelfHosted),
+            child: Row(children: [
+              SizedBox(
+                width: 22,
+                height: 22,
+                child: Checkbox(
+                  value: _bypassSelfHosted,
+                  activeColor: c.accent,
+                  onChanged: (v) => setState(() => _bypassSelfHosted = v ?? false),
                 ),
-                child: _testing
-                    ? const Row(children: [
-                        SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
-                        SizedBox(width: 10),
-                        Text('Testing connections...'),
-                      ])
-                    : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        for (final r in _results!)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 3),
-                            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              Icon(r.ok ? Icons.check_circle_outline : Icons.error_outline,
-                                  size: 16, color: r.ok ? c.success : c.error),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  Text(r.label),
-                                  SelectableText(r.detail,
-                                      style: TextStyle(fontSize: 12, color: c.textSecondary)),
-                                  if (!r.ok && networkHint(r.detail) != null)
-                                    Text(networkHint(r.detail)!, style: const TextStyle(fontSize: 12)),
-                                ]),
-                              ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  'Connect directly to my self-hosted servers'
+                  '${net.selfHostedHosts.isEmpty ? '' : ' (${net.selfHostedHosts.join(', ')})'}',
+                ),
+              ),
+            ]),
+          ),
+        ],
+        const SizedBox(height: 18),
+        const Text('Per-server rules', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        Text(
+          'Use a different proxy, or none, for some servers. Rules apply whatever is chosen '
+          'above. Use *.example.com for all subdomains.',
+          style: TextStyle(fontSize: 12, color: c.textSecondary),
+        ),
+        const SizedBox(height: 8),
+        for (final (i, r) in _rules.indexed)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(children: [
+              Expanded(
+                flex: 2,
+                child: IdeTextField(controller: r.host, hint: 'github.com'),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 3,
+                child: IdeTextField(
+                    controller: r.proxy, hint: 'http://127.0.0.1:7890, or empty for direct'),
+              ),
+              IdeIconButton(
+                icon: Icons.close,
+                tooltip: 'Remove Rule',
+                onPressed: () => setState(() => _rules.removeAt(i).dispose()),
+              ),
+            ]),
+          ),
+        HoverBuilder(
+          cursor: SystemMouseCursors.click,
+          builder: (context, hovered) => GestureDetector(
+            onTap: () => setState(() => _rules.add(_RuleFields('', ''))),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.add, size: 16, color: c.accent),
+              const SizedBox(width: 4),
+              Text('Add Rule',
+                  style: TextStyle(
+                      color: c.accent, decoration: hovered ? TextDecoration.underline : null)),
+            ]),
+          ),
+        ),
+        if (socks) ...[
+          const SizedBox(height: 10),
+          Text(
+            'Git and Git LFS use the SOCKS proxy. EasyGit\'s own requests (account repository '
+            'lists, LFS server test) cannot use SOCKS and connect directly. Use an HTTP or '
+            '"mixed" port to cover them too.',
+            style: TextStyle(fontSize: 12, color: c.warning),
+          ),
+        ],
+        if (_results != null || _testing) ...[
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: c.editorBg,
+              border: Border.all(color: c.border),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: _testing
+                ? const Row(children: [
+                    SizedBox(
+                        width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                    SizedBox(width: 10),
+                    Text('Testing connections...'),
+                  ])
+                : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    for (final r in _results!)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Icon(r.ok ? Icons.check_circle_outline : Icons.error_outline,
+                              size: 16, color: r.ok ? c.success : c.error),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(r.label),
+                              SelectableText(r.detail,
+                                  style: TextStyle(fontSize: 12, color: c.textSecondary)),
+                              if (!r.ok && networkHint(r.detail) != null)
+                                Text(networkHint(r.detail)!, style: const TextStyle(fontSize: 12)),
                             ]),
                           ),
-                      ]),
-              ),
-            ],
+                        ]),
+                      ),
+                  ]),
+          ),
+        ],
+        const SizedBox(height: 18),
+        Row(children: [
+          IdeButton(
+            label: 'Save',
+            primary: true,
+            onPressed: () async {
+              await _apply();
+              if (!mounted) return;
+              setState(() => _saved = true);
+              Future.delayed(const Duration(seconds: 2), () {
+                if (mounted) setState(() => _saved = false);
+              });
+            },
+          ),
+          const SizedBox(width: 8),
+          IdeButton(label: 'Save & Test', onPressed: _testing ? null : _test),
+          if (_saved) ...[
+            const SizedBox(width: 10),
+            Icon(Icons.check, size: 16, color: c.success),
+            const SizedBox(width: 4),
+            Text('Saved', style: TextStyle(color: c.success)),
           ],
-        ),
-      ),
-      actions: [
-        IdeButton(label: 'Apply & Test', onPressed: _testing ? null : _test),
-        IdeButton(label: 'Cancel', onPressed: () => Navigator.pop(context)),
-        IdeButton(
-          label: 'Save',
-          primary: true,
-          onPressed: () async {
-            await _apply();
-            if (context.mounted) Navigator.pop(context);
-          },
-        ),
+        ]),
       ],
     );
   }

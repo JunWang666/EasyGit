@@ -6,11 +6,11 @@ import '../../state/app_settings.dart';
 import '../../state/repo_controller.dart';
 import '../../state/repos_state.dart';
 import '../../theme/ide_theme.dart';
-import '../accounts/accounts_dialog.dart';
+import '../../system/open_requests.dart';
+import '../settings/settings_page.dart';
 import '../commit/commit_flow.dart';
 import '../console/console_panel.dart';
 import '../format.dart';
-import '../settings/network_dialog.dart';
 import '../views/account_view.dart';
 import '../views/repo_views.dart';
 import '../widgets/common.dart';
@@ -22,10 +22,12 @@ import 'status_bar.dart';
 /// Main window: toolbar, repository sidebar, the selected repository's view,
 /// an optional Git console and the status bar.
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, required this.repos, required this.settings});
+  const AppShell(
+      {super.key, required this.repos, required this.settings, required this.openRequests});
 
   final ReposState repos;
   final AppSettings settings;
+  final OpenRequests openRequests;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -42,12 +44,34 @@ class _AppShellState extends State<AppShell> {
     super.initState();
     // Pick up changes made outside the app when the window regains focus.
     _lifecycle = AppLifecycleListener(onResume: repos.refreshAll);
+    widget.openRequests.addListener(_openRequested);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openRequested());
   }
 
   @override
   void dispose() {
+    widget.openRequests.removeListener(_openRequested);
     _lifecycle.dispose();
     super.dispose();
+  }
+
+  var _opening = false;
+
+  /// Opens folders from the command line or the Explorer context menu.
+  Future<void> _openRequested() async {
+    if (_opening) return;
+    _opening = true;
+    try {
+      // Close the settings page or a dialog so the result is visible.
+      Navigator.of(context).popUntil((r) => r.isFirst);
+      for (var path = widget.openRequests.take();
+          path != null && mounted;
+          path = widget.openRequests.take()) {
+        await openFolderFlow(context, repos, path);
+      }
+    } finally {
+      _opening = false;
+    }
   }
 
   void _focusCommit() {
@@ -80,6 +104,7 @@ class _AppShellState extends State<AppShell> {
         },
       primary(LogicalKeyboardKey.backquote): () => setState(() => _showConsole = !_showConsole),
       const SingleActivator(LogicalKeyboardKey.f5): repos.refreshAll,
+      primary(LogicalKeyboardKey.comma): () => showSettingsPage(context, repos),
     };
   }
 
@@ -133,8 +158,8 @@ class _AppShellState extends State<AppShell> {
                     child: _Notifications(
                       ctrl: ctrl,
                       onAction: (a) => a == NotificationAction.networkSettings
-                          ? showNetworkDialog(context, repos)
-                          : showAccountsDialog(context, repos.accounts),
+                          ? showSettingsPage(context, repos, section: SettingsSection.network)
+                          : showSettingsPage(context, repos, section: SettingsSection.accounts),
                     ),
                   ),
               ]);
@@ -218,9 +243,12 @@ class _EmptyState extends StatelessWidget {
                 label: 'Open Local Repository',
                 primary: true,
                 onPressed: () => openRepositoryFlow(context, repos)),
-            IdeButton(label: 'Clone Repository', onPressed: () => cloneRepositoryFlow(context, repos)),
             IdeButton(
-                label: 'Accounts', onPressed: () => showAccountsDialog(context, repos.accounts)),
+                label: 'Clone Repository', onPressed: () => cloneRepositoryFlow(context, repos)),
+            IdeButton(
+                label: 'Accounts',
+                onPressed: () =>
+                    showSettingsPage(context, repos, section: SettingsSection.accounts)),
           ]),
         ]),
       ),

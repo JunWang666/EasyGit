@@ -6,6 +6,7 @@ import '../../state/repo_controller.dart';
 import '../../state/repos_state.dart';
 import '../../theme/ide_theme.dart';
 import '../accounts/accounts_dialog.dart';
+import '../settings/settings_page.dart';
 import '../shell/repo_flows.dart';
 import '../widgets/common.dart';
 
@@ -24,8 +25,7 @@ class _AccountViewState extends State<AccountView> {
   late Future<List<RemoteRepo>> _list = _load();
   var _query = '';
 
-  Future<List<RemoteRepo>> _load() =>
-      widget.repos.accounts.apiFor(widget.account).repositories();
+  Future<List<RemoteRepo>> _load() => widget.repos.accounts.apiFor(widget.account).repositories();
 
   /// The sidebar repository whose remotes point at [repo], if any.
   RepoController? _localClone(RemoteRepo repo) {
@@ -72,13 +72,14 @@ class _AccountViewState extends State<AccountView> {
             ),
             IdeButton(
               label: 'Open in Browser',
-              onPressed: () =>
-                  launchUrl(Uri.parse('${a.server}/${a.username}'), mode: LaunchMode.externalApplication),
+              onPressed: () => launchUrl(Uri.parse('${a.server}/${a.username}'),
+                  mode: LaunchMode.externalApplication),
             ),
             const SizedBox(width: 6),
             IdeButton(
               label: 'Accounts...',
-              onPressed: () => showAccountsDialog(context, widget.repos.accounts),
+              onPressed: () =>
+                  showSettingsPage(context, widget.repos, section: SettingsSection.accounts),
             ),
           ]),
         ),
@@ -188,12 +189,14 @@ class _AccountViewState extends State<AccountView> {
             IdeButton(
               label: 'Clone by URL...',
               primary: true,
-              onPressed: () => cloneRepositoryFlow(context, widget.repos, initialUrl: '${a.server}/'),
+              onPressed: () =>
+                  cloneRepositoryFlow(context, widget.repos, initialUrl: '${a.server}/'),
             ),
             const SizedBox(width: 8),
             IdeButton(
               label: 'Accounts...',
-              onPressed: () => showAccountsDialog(context, widget.repos.accounts),
+              onPressed: () =>
+                  showSettingsPage(context, widget.repos, section: SettingsSection.accounts),
             ),
           ]),
         ]),

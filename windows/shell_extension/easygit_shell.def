@@ -1,0 +1,5 @@
+LIBRARY easygit_shell
+EXPORTS
+  DllCanUnloadNow PRIVATE
+  DllGetClassObject PRIVATE
+  DllGetActivationFactory PRIVATE

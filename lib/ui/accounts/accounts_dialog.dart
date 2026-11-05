@@ -15,12 +15,6 @@ IconData hostingIcon(HostingKind kind) => switch (kind) {
       HostingKind.generic => Icons.dns_outlined,
     };
 
-/// "Version Control > Accounts": list, add and remove hosting accounts.
-Future<void> showAccountsDialog(BuildContext context, AccountsStore store) => showDialog<void>(
-      context: context,
-      builder: (context) => _AccountsDialog(store: store),
-    );
-
 /// Adds an account of [kind]. Returns it, or null if cancelled.
 Future<HostingAccount?> showAddAccountDialog(
         BuildContext context, AccountsStore store, HostingKind kind) =>
@@ -41,8 +35,9 @@ Future<HostingAccount?> pickAndAddAccount(
   return showAddAccountDialog(context, store, kind!);
 }
 
-class _AccountsDialog extends StatelessWidget {
-  const _AccountsDialog({required this.store});
+/// Settings > Accounts: list, add and remove hosting accounts.
+class AccountsPanel extends StatelessWidget {
+  const AccountsPanel({super.key, required this.store});
 
   final AccountsStore store;
 
@@ -51,53 +46,46 @@ class _AccountsDialog extends StatelessWidget {
     final c = IdeColors.of(context);
     return ListenableBuilder(
       listenable: store,
-      builder: (context, _) => IdeDialog(
-        title: 'Version Control Accounts',
-        width: 520,
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Accounts are used to list repositories when cloning, and to authenticate '
-              'fetch, pull and push over HTTPS. Tokens are kept in the system credential store.',
-              style: TextStyle(color: c.textSecondary),
+      builder: (context, _) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Accounts are used to list repositories when cloning, and to authenticate '
+            'fetch, pull and push over HTTPS. Tokens are kept in the system credential store.',
+            style: TextStyle(color: c.textSecondary),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            constraints: BoxConstraints(
+                minHeight: 120, maxHeight: store.accounts.isEmpty ? 120 : 420),
+            decoration: BoxDecoration(
+              color: c.editorBg,
+              border: Border.all(color: c.border),
+              borderRadius: BorderRadius.circular(5),
             ),
-            const SizedBox(height: 12),
-            Container(
-              constraints: const BoxConstraints(minHeight: 120, maxHeight: 280),
-              decoration: BoxDecoration(
-                color: c.editorBg,
-                border: Border.all(color: c.border),
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: store.accounts.isEmpty
-                  ? const EmptyHint('No accounts. Add a GitHub, GitLab or Gitea account.')
-                  : ListView(shrinkWrap: true, children: [
-                      for (final a in store.accounts) _accountRow(context, a),
-                    ]),
-            ),
-            const SizedBox(height: 10),
-            Builder(
-              builder: (context) => HoverBuilder(
-                cursor: SystemMouseCursors.click,
-                builder: (context, hovered) => GestureDetector(
-                  onTapUp: (d) => pickAndAddAccount(context, store, d.globalPosition),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.add, size: 16, color: c.accent),
-                    const SizedBox(width: 4),
-                    Text('Add Account',
-                        style: TextStyle(
-                            color: c.accent,
-                            decoration: hovered ? TextDecoration.underline : null)),
+            child: store.accounts.isEmpty
+                ? const EmptyHint('No accounts. Add a GitHub, GitLab or Gitea account.')
+                : ListView(shrinkWrap: true, children: [
+                    for (final a in store.accounts) _accountRow(context, a),
                   ]),
-                ),
+          ),
+          const SizedBox(height: 10),
+          Builder(
+            builder: (context) => HoverBuilder(
+              cursor: SystemMouseCursors.click,
+              builder: (context, hovered) => GestureDetector(
+                onTapUp: (d) => pickAndAddAccount(context, store, d.globalPosition),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.add, size: 16, color: c.accent),
+                  const SizedBox(width: 4),
+                  Text('Add Account',
+                      style: TextStyle(
+                          color: c.accent, decoration: hovered ? TextDecoration.underline : null)),
+                ]),
               ),
             ),
-          ],
-        ),
-        actions: [
-          IdeButton(label: 'Close', primary: true, onPressed: () => Navigator.pop(context)),
+          ),
         ],
       ),
     );
@@ -183,8 +171,8 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
       _error = null;
     });
     try {
-      final account = await widget.store
-          .add(widget.kind, _server.text, _token.text, username: _username.text);
+      final account =
+          await widget.store.add(widget.kind, _server.text, _token.text, username: _username.text);
       if (mounted) Navigator.pop(context, account);
     } on HostingException catch (e) {
       if (mounted) setState(() => _error = e.message);
@@ -238,23 +226,23 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
             Text(HostingApi.tokenScopesHint(kind),
                 style: TextStyle(fontSize: 12, color: c.textSecondary))
           else
-          Row(children: [
-            HoverBuilder(
-              cursor: SystemMouseCursors.click,
-              builder: (context, hovered) => GestureDetector(
-                onTap: () => launchUrl(Uri.parse(HostingApi.tokenPage(kind, _server.text)),
-                    mode: LaunchMode.externalApplication),
-                child: Text('Generate token...',
-                    style: TextStyle(
-                        color: c.accent, decoration: hovered ? TextDecoration.underline : null)),
+            Row(children: [
+              HoverBuilder(
+                cursor: SystemMouseCursors.click,
+                builder: (context, hovered) => GestureDetector(
+                  onTap: () => launchUrl(Uri.parse(HostingApi.tokenPage(kind, _server.text)),
+                      mode: LaunchMode.externalApplication),
+                  child: Text('Generate token...',
+                      style: TextStyle(
+                          color: c.accent, decoration: hovered ? TextDecoration.underline : null)),
+                ),
               ),
-            ),
-            const SizedBox(width: 10),
-            Flexible(
-              child: Text(HostingApi.tokenScopesHint(kind),
-                  style: TextStyle(fontSize: 12, color: c.textSecondary)),
-            ),
-          ]),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(HostingApi.tokenScopesHint(kind),
+                    style: TextStyle(fontSize: 12, color: c.textSecondary)),
+              ),
+            ]),
           if (_error != null) ...[
             const SizedBox(height: 10),
             Text(_error!, style: TextStyle(color: c.error)),
@@ -265,7 +253,8 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
         if (_busy)
           const Padding(
             padding: EdgeInsets.only(right: 8),
-            child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+            child:
+                SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
           ),
         IdeButton(label: 'Cancel', onPressed: () => Navigator.pop(context)),
         IdeButton(label: 'Log In', primary: true, onPressed: _busy ? null : _submit),

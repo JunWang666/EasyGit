@@ -6,17 +6,31 @@ class AppSettings extends ChangeNotifier {
   static const _recentKey = 'recentRepositories';
   static const _themeKey = 'themeMode';
   static const _selectedKey = 'selectedRepository';
+  static const _ideKey = 'preferredIde';
+  static const _customIdeKey = 'customIdePath';
+  static const _explorerTabKey = 'explorerOpenInTab';
 
   /// Repositories shown in the sidebar, in order.
   List<String> recent = [];
   String? selectedRepository;
   ThemeMode themeMode = ThemeMode.system;
 
+  /// Id of the IDE used by "Open in IDE" (`custom` for [customIdePath]).
+  String? preferredIde;
+  String? customIdePath;
+
+  /// "Open in Explorer" adds a tab to the most recent Explorer window instead
+  /// of opening a new one.
+  bool explorerOpenInTab = false;
+
   Future<void> load() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       recent = prefs.getStringList(_recentKey) ?? [];
       selectedRepository = prefs.getString(_selectedKey);
+      preferredIde = prefs.getString(_ideKey);
+      customIdePath = prefs.getString(_customIdeKey);
+      explorerOpenInTab = prefs.getBool(_explorerTabKey) ?? false;
       final theme = prefs.getInt(_themeKey) ?? 0;
       themeMode = ThemeMode.values[theme.clamp(0, ThemeMode.values.length - 1)];
     } catch (_) {
@@ -54,6 +68,28 @@ class AppSettings extends ChangeNotifier {
     themeMode = mode;
     notifyListeners();
     await _save();
+  }
+
+  /// Remembers the IDE for "Open in IDE"; [customPath] goes with id `custom`.
+  Future<void> setPreferredIde(String id, {String? customPath}) async {
+    preferredIde = id;
+    if (customPath != null) customIdePath = customPath;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_ideKey, id);
+      final custom = customIdePath;
+      if (custom != null) await prefs.setString(_customIdeKey, custom);
+    } catch (_) {}
+  }
+
+  Future<void> setExplorerOpenInTab(bool value) async {
+    explorerOpenInTab = value;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_explorerTabKey, value);
+    } catch (_) {}
   }
 
   Future<void> _save() async {

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -22,6 +23,32 @@ enum ProxyMode {
   const ProxyMode(this.label);
 
   final String label;
+}
+
+/// A proxy for one server, applied on top of the general [ProxyMode].
+class ProxyRule {
+  const ProxyRule(this.host, this.proxy);
+
+  /// `github.com`, or `*.example.com` for its subdomains.
+  final String host;
+
+  /// Proxy URL, or empty to connect directly.
+  final String proxy;
+
+  bool get isDirect => proxy.trim().isEmpty;
+  bool get isValid => RegExp(r'^(\*\.)?[A-Za-z0-9.-]+(:\d+)?$').hasMatch(host.trim());
+
+  bool matches(String uriHost) {
+    final h = uriHost.toLowerCase();
+    final p = host.trim().toLowerCase().split(':').first;
+    if (p.startsWith('*.')) return h.endsWith(p.substring(1));
+    return h == p;
+  }
+
+  Map<String, String> toJson() => {'host': host, 'proxy': proxy};
+
+  static ProxyRule fromJson(Map<String, dynamic> j) =>
+      ProxyRule(j['host'] as String? ?? '', j['proxy'] as String? ?? '');
 }
 
 /// A proxy that is actually in effect.
@@ -70,6 +97,9 @@ class NetworkSettings extends ChangeNotifier {
   /// Hosts of self-hosted accounts, provided by the accounts store.
   List<String> selfHostedHosts = const [];
 
+  /// Per-server proxies. They apply in every mode and win over it.
+  List<ProxyRule> rules = const [];
+
   SystemProxy? system;
 
   bool get hasPassword => _password.isNotEmpty;
@@ -83,6 +113,13 @@ class NetworkSettings extends ChangeNotifier {
       username = p.getString('proxy.user') ?? '';
       bypass = p.getString('proxy.bypass') ?? bypass;
       bypassSelfHosted = p.getBool('proxy.bypassSelfHosted') ?? false;
+      final rawRules = p.getString('proxy.rules');
+      if (rawRules != null) {
+        rules = [
+          for (final r in jsonDecode(rawRules) as List)
+            ProxyRule.fromJson(r as Map<String, dynamic>)
+        ];
+      }
       _password = await _storage.read(key: _passwordKey) ?? '';
     } catch (e) {
       debugPrint('Cannot load network settings: $e');
@@ -98,8 +135,16 @@ class NetworkSettings extends ChangeNotifier {
     String? password,
     required String bypass,
     required bool bypassSelfHosted,
+    List<ProxyRule>? rules,
   }) async {
     this.mode = mode;
+    if (rules != null) {
+      this.rules = [
+        for (final r in rules)
+          if (r.host.trim().isNotEmpty)
+            ProxyRule(r.host.trim(), r.isDirect ? '' : normalizeProxyUrl(r.proxy)),
+      ];
+    }
     this.manualUrl = manualUrl.trim();
     this.username = username.trim();
     if (password != null) _password = password;
@@ -112,6 +157,7 @@ class NetworkSettings extends ChangeNotifier {
       await p.setString('proxy.user', this.username);
       await p.setString('proxy.bypass', bypass);
       await p.setBool('proxy.bypassSelfHosted', bypassSelfHosted);
+      await p.setString('proxy.rules', jsonEncode([for (final r in this.rules) r.toJson()]));
       if (password != null) {
         password.isEmpty
             ? await _storage.delete(key: _passwordKey)
@@ -168,40 +214,61 @@ class NetworkSettings extends ChangeNotifier {
   /// Environment for git processes. Config entries use GIT_CONFIG_COUNT,
   /// which git and git-lfs both read, so nothing shows up in process lists.
   Map<String, String> gitEnvironment() {
+    final config = <(String, String)>[];
+    final env = <String, String>{};
     switch (mode) {
       case ProxyMode.gitConfig:
-        return const {};
+        break;
       case ProxyMode.none:
-        return const {
-          'GIT_CONFIG_COUNT': '1',
-          'GIT_CONFIG_KEY_0': 'http.proxy',
-          'GIT_CONFIG_VALUE_0': '',
-          'HTTPS_PROXY': '',
-          'HTTP_PROXY': '',
-          'ALL_PROXY': '',
-          'https_proxy': '',
-          'http_proxy': '',
-          'all_proxy': '',
-        };
+        config.add(('http.proxy', ''));
+        for (final k in ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY']) {
+          env[k] = '';
+          env[k.toLowerCase()] = '';
+        }
       case ProxyMode.system:
       case ProxyMode.manual:
         final url = _gitProxyUrl;
-        if (url == null) return const {};
-        final noProxy = bypassList.join(',');
-        return {
-          'GIT_CONFIG_COUNT': '1',
-          'GIT_CONFIG_KEY_0': 'http.proxy',
-          'GIT_CONFIG_VALUE_0': url,
-          if (noProxy.isNotEmpty) ...{'NO_PROXY': noProxy, 'no_proxy': noProxy},
-        };
+        if (url == null) break;
+        config.add(('http.proxy', url));
+        // Hosts with their own rule must not be bypassed by NO_PROXY.
+        final noProxy = bypassList
+            .where((b) => !rules.any((r) => !r.isDirect && r.matches(b.replaceFirst('*.', ''))))
+            .join(',');
+        if (noProxy.isNotEmpty) env.addAll({'NO_PROXY': noProxy, 'no_proxy': noProxy});
     }
+    // git matches http.<url>.proxy by URL, more specific than http.proxy.
+    // An empty value means a direct connection.
+    for (final r in rules) {
+      if (!r.isValid) continue;
+      for (final scheme in ['https', 'http']) {
+        config.add(('http.$scheme://${r.host.trim()}.proxy', r.proxy));
+      }
+    }
+    if (config.isEmpty) return env;
+    return {
+      ...env,
+      'GIT_CONFIG_COUNT': '${config.length}',
+      for (var i = 0; i < config.length; i++) ...{
+        'GIT_CONFIG_KEY_$i': config[i].$1,
+        'GIT_CONFIG_VALUE_$i': config[i].$2,
+      },
+    };
   }
+
+  /// The rule for [host], if any.
+  ProxyRule? ruleFor(String host) => rules.where((r) => r.isValid && r.matches(host)).firstOrNull;
 
   /// Proxy for EasyGit's own requests (hosting APIs, LFS server test).
   /// Dart's HttpClient only speaks HTTP proxies, so SOCKS falls back to direct.
   static String findProxy(Uri uri) {
     final s = current;
     if (s == null) return 'DIRECT';
+    if (s.ruleFor(uri.host) case final rule?) {
+      if (rule.isDirect) return 'DIRECT';
+      final u = Uri.tryParse(normalizeProxyUrl(rule.proxy));
+      if (u == null || u.scheme.startsWith('socks')) return 'DIRECT';
+      return 'PROXY ${u.host}:${u.hasPort ? u.port : 80}';
+    }
     if (s.mode == ProxyMode.none) return 'DIRECT';
     final p = s.effective;
     if (p == null) {
@@ -290,7 +357,8 @@ SystemProxy parseWindowsProxy(String out) {
   if (server.contains('=')) {
     final parts = {
       for (final p in server.split(';'))
-        if (p.contains('=')) p.substring(0, p.indexOf('=')).toLowerCase(): p.substring(p.indexOf('=') + 1),
+        if (p.contains('='))
+          p.substring(0, p.indexOf('=')).toLowerCase(): p.substring(p.indexOf('=') + 1),
     };
     if (parts['https'] != null) {
       url = 'http://${parts['https']}';
@@ -339,18 +407,23 @@ SystemProxy parseMacProxy(String out) {
 /// A short explanation for network failures in git's stderr, if recognised.
 String? networkHint(String message) {
   final m = message.toLowerCase();
-  if (m.contains('over proxy') || m.contains('proxyconnect') || m.contains('proxy connect') ||
+  if (m.contains('over proxy') ||
+      m.contains('proxyconnect') ||
+      m.contains('proxy connect') ||
       m.contains('could not resolve proxy')) {
     return 'The proxy could not be reached. Check that it is running, or change it in Network settings.';
   }
-  if (m.contains('ssl certificate problem') || m.contains('certificate signed by unknown authority') ||
+  if (m.contains('ssl certificate problem') ||
+      m.contains('certificate signed by unknown authority') ||
       m.contains('x509:')) {
     return 'The server\'s certificate is not trusted. A self-hosted server may need its CA certificate configured.';
   }
   if (m.contains('could not resolve host') || m.contains('no such host')) {
     return 'The server name could not be resolved. If you need a proxy to reach it, set one in Network settings.';
   }
-  if (m.contains('timed out') || m.contains('connection reset') || m.contains('failed to connect') ||
+  if (m.contains('timed out') ||
+      m.contains('connection reset') ||
+      m.contains('failed to connect') ||
       m.contains('connection refused')) {
     return 'The connection failed. If this network needs a proxy, set one in Network settings.';
   }

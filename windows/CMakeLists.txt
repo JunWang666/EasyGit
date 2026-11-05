@@ -52,6 +52,9 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+# "Open in EasyGit" in the Explorer context menu; see shell_extension/.
+add_subdirectory("shell_extension")
+
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
@@ -74,6 +77,13 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
+
+# Explorer context menu: the handler DLL next to easygit.exe, and its package
+# manifest in shell\ (registered with this folder as external location).
+install(TARGETS easygit_shell RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+install(FILES "shell_extension/AppxManifest.xml" "shell_extension/logo.png"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/shell" COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)

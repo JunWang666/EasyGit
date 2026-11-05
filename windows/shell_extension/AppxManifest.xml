@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sparse package that gives the "Open in EasyGit" handler (easygit_shell.dll)
+  the package identity the Windows 11 context menu requires. The package holds
+  only this manifest and a logo; the DLL and easygit.exe stay in the install
+  folder, passed as the external location when registering:
+
+    Add-AppxPackage -Register <bundle>\shell\AppxManifest.xml -ExternalLocation <bundle>
+
+  An unsigned registration like this needs Developer Mode. For everyone else,
+  pack and sign it (windows/shell_extension/package.ps1) and install the .msix
+  with -ExternalLocation instead.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  IgnorableNamespaces="uap uap10 rescap desktop4 desktop5 com">
+  <Identity Name="EasyGit.ExplorerMenu" Publisher="CN=EasyGit" Version="0.2.0.0"
+            ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>EasyGit Explorer menu</DisplayName>
+    <PublisherDisplayName>EasyGit</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0"
+                        MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+  <Applications>
+    <Application Id="EasyGit" Executable="easygit.exe"
+                 uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
+      <uap:VisualElements AppListEntry="none" DisplayName="EasyGit"
+                          Description="EasyGit Explorer menu" BackgroundColor="transparent"
+                          Square150x150Logo="logo.png" Square44x44Logo="logo.png" />
+      <Extensions>
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type="Directory">
+              <desktop5:Verb Id="OpenInEasyGit" Clsid="EE18C7F1-DA63-46D6-8FA2-DE30FB6FD490" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type="Directory\Background">
+              <desktop5:Verb Id="OpenInEasyGit" Clsid="EE18C7F1-DA63-46D6-8FA2-DE30FB6FD490" />
+            </desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="EasyGit Explorer menu">
+              <com:Class Id="EE18C7F1-DA63-46D6-8FA2-DE30FB6FD490" Path="easygit_shell.dll"
+                         ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>

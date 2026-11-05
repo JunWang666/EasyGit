@@ -3,7 +3,7 @@
 ; Then compile: ISCC.exe windows\installer\easygit.iss
 
 #define AppName "EasyGit"
-#define AppVersion "0.1.0"
+#define AppVersion "0.2.0"
 #define AppExe "easygit.exe"
 #define ReleaseDir "..\..\build\windows\x64\runner\Release"
 
@@ -38,4 +38,13 @@ Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
+; "Open in EasyGit" in the Windows 11 Explorer context menu. Only when the
+; signed package exists (windows\shell_extension\package.ps1); otherwise users
+; can install it from Settings > External Tools.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Add-AppxPackage -Path '{app}\shell\EasyGit.ExplorerMenu.msix' -ExternalLocation '{app}' -ForceUpdateFromAnyVersion"""; Flags: runhidden; StatusMsg: "Adding the Explorer context menu..."; Check: FileExists(ExpandConstant('{app}\shell\EasyGit.ExplorerMenu.msix'))
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Get-AppxPackage -Name EasyGit.ExplorerMenu | Remove-AppxPackage"""; Flags: runhidden; RunOnceId: "RemoveExplorerMenu"
+Filename: "reg.exe"; Parameters: "delete HKCU\Software\Classes\Directory\shell\EasyGit /f"; Flags: runhidden; RunOnceId: "RemoveClassicMenu1"
+Filename: "reg.exe"; Parameters: "delete HKCU\Software\Classes\Directory\Background\shell\EasyGit /f"; Flags: runhidden; RunOnceId: "RemoveClassicMenu2"

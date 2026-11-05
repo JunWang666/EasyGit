@@ -100,17 +100,30 @@ class AccountsStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The git credential for [account], or null when its token is missing.
+  GitCredential? credentialFor(HostingAccount account) {
+    final token = _tokens[account.id];
+    if (token == null) return null;
+    return GitCredential(
+        account.server, account.kind == HostingKind.gitlab ? 'oauth2' : account.username, token);
+  }
+
+  /// Credentials that use [account] for its server and the usual accounts for
+  /// every other server.
+  List<GitCredential>? credentialsPreferring(HostingAccount account) {
+    final own = credentialFor(account);
+    if (own == null) return null;
+    return [own, ...GitRunner.credentials.where((c) => c.server != own.server)];
+  }
+
   /// Lets git authenticate HTTPS remotes on these servers with the tokens.
+  /// With several accounts on one server the first one added is used, unless
+  /// a repository picks another (see `RepoController.setAccount`).
   void _publishCredentials() {
     final seen = <String>{};
     GitRunner.credentials = [
       for (final a in accounts)
-        if (_tokens[a.id] != null && seen.add(a.server))
-          GitCredential(
-            a.server,
-            a.kind == HostingKind.gitlab ? 'oauth2' : a.username,
-            _tokens[a.id]!,
-          ),
+        if (credentialFor(a) case final c? when seen.add(a.server)) c,
     ];
   }
 

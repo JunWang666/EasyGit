@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -9,10 +7,13 @@ import '../../state/repo_controller.dart';
 import '../../state/repos_state.dart';
 import '../../theme/ide_theme.dart';
 import '../accounts/accounts_dialog.dart';
+import '../settings/settings_page.dart';
 import '../lfs/lfs_dialog.dart';
 import '../remotes/manage_remotes_dialog.dart';
 import '../widgets/common.dart';
 import '../widgets/menus.dart';
+import '../../system/open_in.dart';
+import '../repo/repo_settings_dialog.dart';
 import 'repo_flows.dart';
 
 /// Left sidebar: the repositories you work with and your online accounts.
@@ -103,7 +104,7 @@ class Sidebar extends StatelessWidget {
             onTap: () => launchUrl(Uri.parse(a.server), mode: LaunchMode.externalApplication)),
         IdeMenuItem('Manage Accounts...',
             icon: Icons.manage_accounts_outlined,
-            onTap: () => showAccountsDialog(context, repos.accounts)),
+            onTap: () => showSettingsPage(context, repos, section: SettingsSection.accounts)),
       ]),
       child: Row(children: [
         Container(
@@ -275,15 +276,17 @@ class _RepoRow extends StatelessWidget {
   void _menu(BuildContext context, Offset pos) {
     final web = ctrl.webFor();
     showIdeMenu(context, pos, [
-      IdeMenuItem('Show in File Manager',
+      IdeMenuItem('Show in $fileManagerName',
           icon: Icons.folder_outlined,
-          onTap: () => ctrl.openUrl(
-              Uri.directory(ctrl.repo.root, windows: Platform.isWindows).toString())),
+          onTap: () => openInFileManager(ctrl.repo.root, inTab: repos.settings.explorerOpenInTab)
+              .catchError((Object e) => ctrl.reportError('Cannot open $fileManagerName', '$e'))),
       IdeMenuItem('Copy Path',
           icon: Icons.copy, onTap: () => Clipboard.setData(ClipboardData(text: ctrl.repo.root))),
       if (web != null)
         IdeMenuItem('Open on ${web.kind.shortLabel}',
             icon: hostingIcon(web.kind), onTap: () => ctrl.openUrl(web.home)),
+      IdeMenuItem('Repository Settings...',
+          icon: Icons.badge_outlined, onTap: () => showRepoSettingsDialog(context, ctrl)),
       IdeMenuItem('Manage Remotes...',
           icon: Icons.cloud_outlined, onTap: () => showManageRemotesDialog(context, ctrl)),
       IdeMenuItem('Git LFS...',

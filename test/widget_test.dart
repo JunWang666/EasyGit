@@ -5,6 +5,7 @@ import 'package:easygit/state/accounts_store.dart';
 import 'package:easygit/state/app_settings.dart';
 import 'package:easygit/state/repo_controller.dart';
 import 'package:easygit/state/repos_state.dart';
+import 'package:easygit/system/open_requests.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -31,7 +32,7 @@ void main() {
   testWidgets('empty state renders', (tester) async {
     _bigWindow(tester);
     final repos = await _state();
-    await tester.pumpWidget(EasyGitApp(settings: repos.settings, repos: repos));
+    await tester.pumpWidget(EasyGitApp(settings: repos.settings, repos: repos, openRequests: OpenRequests(const [])));
     await tester.pump();
 
     expect(find.text('Welcome to EasyGit'), findsOneWidget);
@@ -62,7 +63,7 @@ void main() {
     });
     addTearDown(() => tmp.delete(recursive: true).catchError((_) => tmp));
 
-    await tester.pumpWidget(EasyGitApp(settings: repos.settings, repos: repos));
+    await tester.pumpWidget(EasyGitApp(settings: repos.settings, repos: repos, openRequests: OpenRequests(const [])));
     await tester.pump();
 
     expect(ctrl.status!.changes.single.path, 'a.txt');
