@@ -38,8 +38,8 @@ editor.
 - **GitHub, GitLab and Gitea/Forgejo accounts** (including GitHub Enterprise, self-managed
   GitLab and Codeberg), signed in with a personal access token:
   - The clone dialog has a tab per account, listing its repositories with search.
-  - Fetch, pull, push and clone over HTTPS use the account's token for that server. Other
-    servers keep using your normal Git credential manager.
+  - Fetch, pull, push and clone over HTTPS use only EasyGit's accounts, never the system or
+    global Git credential helpers. Cloning from an account also selects it for the new repository.
   - Tokens are stored in the system credential store (Windows Credential Manager, macOS
     Keychain, libsecret on Linux), never in plain files.
   - You get "Open on GitHub/GitLab" for the repository, commits, files and branches, and

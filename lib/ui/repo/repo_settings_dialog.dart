@@ -111,7 +111,7 @@ class _RepoSettingsDialogState extends State<_RepoSettingsDialog> {
                 selected: _accountId == null,
                 title: 'Automatic',
                 subtitle: 'The first account signed in for the remote\'s server'
-                    '${host == null ? '' : ' ($host)'}, or Git\'s own credential manager.',
+                    '${host == null ? '' : ' ($host)'}. System Git credential helpers are not used.',
                 onTap: () => setState(() => _accountId = null),
               ),
               for (final a in accounts)

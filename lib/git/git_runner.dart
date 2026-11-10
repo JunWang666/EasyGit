@@ -26,7 +26,7 @@ class GitRunner {
   void Function(GitCommandLog log)? onLog;
 
   /// Credentials for this runner only, in place of [credentials]. Set when a
-  /// repository is bound to one account (see `RepoController.pushAccountId`).
+  /// repository is bound to one account (see `RepoController.setAccount`).
   List<GitCredential>? credentialOverride;
 
   /// Path or name of the git executable.
@@ -43,14 +43,15 @@ class GitRunner {
   /// environment variables so secrets never appear on the command line.
   static Map<String, String> networkEnv = const {};
 
-  /// Adds a credential helper per signed-in server. The secrets travel in
-  /// environment variables, so they never appear on the command line.
+  /// Disables system and global credential helpers, then adds one helper per
+  /// signed-in server. The secrets travel in environment variables, so they
+  /// never appear on the command line.
   static (List<String>, Map<String, String>) _credentialArgs(
       List<String> args, List<GitCredential> credentials) {
-    if (credentials.isEmpty || args.isEmpty || !_networkCommands.contains(args.first)) {
+    if (args.isEmpty || !_networkCommands.contains(args.first)) {
       return (const [], const {});
     }
-    final config = <String>[];
+    final config = ['-c', 'credential.helper='];
     final env = <String, String>{};
     for (var i = 0; i < credentials.length; i++) {
       final c = credentials[i];
@@ -86,8 +87,7 @@ class GitRunner {
       {String? stdin, bool log = false, Duration? timeout, Map<String, String>? env}) async {
     final command = 'git ${args.map(_quote).join(' ')}';
     if (!isSupported) {
-      throw GitException(command,
-          'The git command line is not available on this platform.', -1);
+      throw GitException(command, 'The git command line is not available on this platform.', -1);
     }
     final (credentialConfig, credentialEnv) =
         _credentialArgs(args, credentialOverride ?? credentials);
@@ -100,8 +100,8 @@ class GitRunner {
         environment: {..._env, ...networkEnv, ...credentialEnv, ...?env},
       );
     } on ProcessException catch (e) {
-      throw GitException(command,
-          'Unable to start git (${e.message}). Is Git installed and on PATH?', -1);
+      throw GitException(
+          command, 'Unable to start git (${e.message}). Is Git installed and on PATH?', -1);
     }
     const decoder = Utf8Decoder(allowMalformed: true);
     final out = process.stdout.transform(decoder).join();
@@ -141,6 +141,5 @@ class GitRunner {
     return stdout;
   }
 
-  static String _quote(String arg) =>
-      arg.isEmpty || arg.contains(' ') ? '"$arg"' : arg;
+  static String _quote(String arg) => arg.isEmpty || arg.contains(' ') ? '"$arg"' : arg;
 }

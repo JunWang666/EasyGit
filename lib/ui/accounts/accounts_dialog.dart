@@ -52,7 +52,8 @@ class AccountsPanel extends StatelessWidget {
         children: [
           Text(
             'Accounts are used to list repositories when cloning, and to authenticate '
-            'fetch, pull and push over HTTPS. Tokens are kept in the system credential store.',
+            'fetch, pull, push and clone over HTTPS. EasyGit uses these accounts instead of '
+            'Git credential helpers. Tokens are kept in the system credential store.',
             style: TextStyle(color: c.textSecondary),
           ),
           const SizedBox(height: 12),

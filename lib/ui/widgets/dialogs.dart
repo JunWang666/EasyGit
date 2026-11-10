@@ -229,37 +229,39 @@ Future<T?> showChoiceDialog<T>(
         builder: (context, setState) => IdeDialog(
           title: title,
           width: 500,
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (message != null) ...[Text(message), const SizedBox(height: 10)],
-              for (final o in options)
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => setState(() => selected = o.value),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 5),
-                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Icon(
-                        o.value == selected
-                            ? Icons.radio_button_checked
-                            : Icons.radio_button_unchecked,
-                        size: 16,
-                        color: o.value == selected ? c.accent : c.buttonBorder,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(o.label),
-                          if (o.description != null)
-                            Text(o.description!, style: Theme.of(context).textTheme.bodySmall),
-                        ]),
-                      ),
-                    ]),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (message != null) ...[Text(message), const SizedBox(height: 10)],
+                for (final o in options)
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => setState(() => selected = o.value),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 5),
+                      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Icon(
+                          o.value == selected
+                              ? Icons.radio_button_checked
+                              : Icons.radio_button_unchecked,
+                          size: 16,
+                          color: o.value == selected ? c.accent : c.buttonBorder,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(o.label),
+                            if (o.description != null)
+                              Text(o.description!, style: Theme.of(context).textTheme.bodySmall),
+                          ]),
+                        ),
+                      ]),
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
           actions: [
             IdeButton(label: 'Cancel', onPressed: () => Navigator.pop(context)),

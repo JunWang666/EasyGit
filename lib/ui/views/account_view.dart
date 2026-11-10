@@ -150,56 +150,60 @@ class _AccountViewState extends State<AccountView> {
       color: c.editorBg,
       padding: const EdgeInsets.all(24),
       alignment: Alignment.topLeft,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Icon(hostingIcon(a.kind), size: 26, color: c.icon),
-            const SizedBox(width: 12),
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(a.server, style: Theme.of(context).textTheme.titleMedium),
-              Text('Signed in as ${a.username}', style: TextStyle(color: c.textSecondary)),
-            ]),
-          ]),
-          const SizedBox(height: 16),
-          Text(
-            'EasyGit gives these credentials to git and git-lfs whenever they connect to '
-            '${a.host} over HTTPS: fetch, pull, push, clone and LFS transfers. Self-hosted '
-            'servers have no repository list here; clone them by URL.',
-          ),
-          const SizedBox(height: 16),
-          Text('Repositories in the sidebar that use this server',
-              style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 6),
-          if (users.isEmpty)
-            Text('None yet.', style: TextStyle(color: c.textSecondary))
-          else
-            for (final r in users)
-              ListRow(
-                height: 30,
-                onTap: () => widget.repos.select(r),
-                child: Row(children: [
-                  Icon(Icons.folder_outlined, size: 15, color: c.icon),
-                  const SizedBox(width: 8),
-                  Text(r.name),
+      child: SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Icon(hostingIcon(a.kind), size: 26, color: c.icon),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(a.server, style: Theme.of(context).textTheme.titleMedium),
+                  Text('Signed in as ${a.username}', style: TextStyle(color: c.textSecondary)),
                 ]),
               ),
-          const SizedBox(height: 16),
-          Row(children: [
-            IdeButton(
-              label: 'Clone by URL...',
-              primary: true,
-              onPressed: () =>
-                  cloneRepositoryFlow(context, widget.repos, initialUrl: '${a.server}/'),
+            ]),
+            const SizedBox(height: 16),
+            Text(
+              'EasyGit gives these credentials to git and git-lfs whenever they connect to '
+              '${a.host} over HTTPS: fetch, pull, push, clone and LFS transfers. Self-hosted '
+              'servers have no repository list here; clone them by URL.',
             ),
-            const SizedBox(width: 8),
-            IdeButton(
-              label: 'Accounts...',
-              onPressed: () =>
-                  showSettingsPage(context, widget.repos, section: SettingsSection.accounts),
-            ),
+            const SizedBox(height: 16),
+            Text('Repositories in the sidebar that use this server',
+                style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 6),
+            if (users.isEmpty)
+              Text('None yet.', style: TextStyle(color: c.textSecondary))
+            else
+              for (final r in users)
+                ListRow(
+                  height: 30,
+                  onTap: () => widget.repos.select(r),
+                  child: Row(children: [
+                    Icon(Icons.folder_outlined, size: 15, color: c.icon),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                  ]),
+                ),
+            const SizedBox(height: 16),
+            Row(children: [
+              IdeButton(
+                label: 'Clone by URL...',
+                primary: true,
+                onPressed: () =>
+                    cloneRepositoryFlow(context, widget.repos, initialUrl: '${a.server}/'),
+              ),
+              const SizedBox(width: 8),
+              IdeButton(
+                label: 'Accounts...',
+                onPressed: () =>
+                    showSettingsPage(context, widget.repos, section: SettingsSection.accounts),
+              ),
+            ]),
           ]),
-        ]),
+        ),
       ),
     );
   }
@@ -243,7 +247,8 @@ class _AccountViewState extends State<AccountView> {
           IdeButton(
             label: 'Clone...',
             primary: true,
-            onPressed: () => cloneRepositoryFlow(context, widget.repos, initialUrl: r.httpsUrl),
+            onPressed: () => cloneRepositoryFlow(context, widget.repos,
+                initialUrl: r.httpsUrl, initialAccountId: widget.account.id),
           ),
       ]),
     );

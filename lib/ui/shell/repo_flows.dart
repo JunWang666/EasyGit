@@ -12,9 +12,11 @@ import '../widgets/dialogs.dart';
 
 /// Adds the repository at [path] to the sidebar, offering `git init` when the
 /// folder is not a repository yet.
-Future<void> openRepositoryAt(BuildContext context, ReposState repos, String path) async {
+Future<void> openRepositoryAt(BuildContext context, ReposState repos, String path,
+    {String? accountId}) async {
   try {
-    await repos.open(path);
+    final ctrl = await repos.open(path);
+    if (accountId != null) await ctrl.setAccount(accountId);
   } on GitException catch (e) {
     if (!context.mounted) return;
     if (!e.message.contains('not a git repository')) {
@@ -125,9 +127,11 @@ Future<void> openRepositoryFlow(BuildContext context, ReposState repos) async {
 }
 
 Future<void> cloneRepositoryFlow(BuildContext context, ReposState repos,
-    {String? initialUrl}) async {
-  final request = await showCloneDialog(context, repos.accounts, initialUrl: initialUrl);
+    {String? initialUrl, String? initialAccountId}) async {
+  final request = await showCloneDialog(context, repos.accounts,
+      initialUrl: initialUrl, initialAccountId: initialAccountId);
   if (request == null || !context.mounted) return;
+  final account = repos.accounts.accounts.where((a) => a.id == request.accountId).firstOrNull;
   final navigator = Navigator.of(context);
   showDialog<void>(
     context: context,
@@ -136,7 +140,8 @@ Future<void> cloneRepositoryFlow(BuildContext context, ReposState repos,
   );
   GitException? error;
   try {
-    await GitRepository.clone(request.url, request.parent, request.folder);
+    await GitRepository.clone(request.url, request.parent, request.folder,
+        credentials: account == null ? null : repos.accounts.credentialsPreferring(account));
   } on GitException catch (e) {
     error = e;
   } finally {
@@ -147,7 +152,8 @@ Future<void> cloneRepositoryFlow(BuildContext context, ReposState repos,
     await showConfirmDialog(context, title: 'Clone Failed', message: error.message);
     return;
   }
-  await openRepositoryAt(context, repos, '${request.parent}/${request.folder}');
+  await openRepositoryAt(context, repos, '${request.parent}/${request.folder}',
+      accountId: account?.id);
 }
 
 class _Progress extends StatelessWidget {

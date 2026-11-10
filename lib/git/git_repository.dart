@@ -49,8 +49,11 @@ class GitRepository {
 
   static Future<void> init(String dir) => GitRunner(dir).run(['init']);
 
-  static Future<void> clone(String url, String parentDir, String folder) =>
-      GitRunner(parentDir).run(['clone', url, folder]);
+  static Future<void> clone(String url, String parentDir, String folder,
+      {List<GitCredential>? credentials}) {
+    final git = GitRunner(parentDir)..credentialOverride = credentials;
+    return git.run(['clone', url, folder]);
+  }
 
   // ---------------------------------------------------------------- status
 

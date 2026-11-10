@@ -8,21 +8,23 @@ import '../accounts/accounts_dialog.dart';
 import '../widgets/common.dart';
 import '../widgets/dialogs.dart';
 
-typedef CloneRequest = ({String url, String parent, String folder});
+typedef CloneRequest = ({String url, String parent, String folder, String? accountId});
 
 /// "Get from Version Control": clone by URL or from a signed-in account.
 Future<CloneRequest?> showCloneDialog(BuildContext context, AccountsStore accounts,
-        {String? initialUrl}) =>
+        {String? initialUrl, String? initialAccountId}) =>
     showDialog<CloneRequest>(
       context: context,
-      builder: (context) => _CloneDialog(accounts: accounts, initialUrl: initialUrl),
+      builder: (context) => _CloneDialog(
+          accounts: accounts, initialUrl: initialUrl, initialAccountId: initialAccountId),
     );
 
 class _CloneDialog extends StatefulWidget {
-  const _CloneDialog({required this.accounts, this.initialUrl});
+  const _CloneDialog({required this.accounts, this.initialUrl, this.initialAccountId});
 
   final AccountsStore accounts;
   final String? initialUrl;
+  final String? initialAccountId;
 
   @override
   State<_CloneDialog> createState() => _CloneDialogState();
@@ -34,8 +36,10 @@ class _CloneDialogState extends State<_CloneDialog> {
   @override
   void initState() {
     super.initState();
+    _tab = widget.initialAccountId;
     if (widget.initialUrl != null) _urlChanged(widget.initialUrl!);
   }
+
   final _parent = TextEditingController();
   final _folder = TextEditingController();
   var _folderEdited = false;
@@ -74,7 +78,7 @@ class _CloneDialogState extends State<_CloneDialog> {
     final parent = _parent.text.trim();
     final folder = _folder.text.trim();
     if (url.isEmpty || parent.isEmpty || folder.isEmpty) return;
-    Navigator.pop(context, (url: url, parent: parent, folder: folder));
+    Navigator.pop(context, (url: url, parent: parent, folder: folder, accountId: _tab));
   }
 
   @override
@@ -87,42 +91,44 @@ class _CloneDialogState extends State<_CloneDialog> {
         return IdeDialog(
           title: 'Clone Repository',
           width: 660,
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _tabs(accounts),
-              const SizedBox(height: 12),
-              if (account == null) ...[
-                const Text('URL:'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _tabs(accounts),
+                const SizedBox(height: 12),
+                if (account == null) ...[
+                  const Text('URL:'),
+                  const SizedBox(height: 6),
+                  IdeTextField(
+                    controller: _url,
+                    autofocus: true,
+                    hint: 'https://github.com/user/repo.git',
+                    onChanged: _urlChanged,
+                  ),
+                ] else
+                  _AccountRepos(
+                    key: ValueKey(account.id),
+                    api: widget.accounts.apiFor(account),
+                    selectedUrl: _url.text,
+                    onSelect: (repo) => _setUrl(repo.httpsUrl),
+                  ),
+                const SizedBox(height: 12),
+                const Text('Directory:'),
                 const SizedBox(height: 6),
-                IdeTextField(
-                  controller: _url,
-                  autofocus: true,
-                  hint: 'https://github.com/user/repo.git',
-                  onChanged: _urlChanged,
-                ),
-              ] else
-                _AccountRepos(
-                  key: ValueKey(account.id),
-                  api: widget.accounts.apiFor(account),
-                  selectedUrl: _url.text,
-                  onSelect: (repo) => _setUrl(repo.httpsUrl),
-                ),
-              const SizedBox(height: 12),
-              const Text('Directory:'),
-              const SizedBox(height: 6),
-              Row(children: [
-                Expanded(child: IdeTextField(controller: _parent, hint: 'Parent folder')),
-                const SizedBox(width: 6),
-                IdeIconButton(
-                    icon: Icons.folder_open_outlined, tooltip: 'Browse', onPressed: _browse),
-              ]),
-              const SizedBox(height: 12),
-              const Text('Folder name:'),
-              const SizedBox(height: 6),
-              IdeTextField(controller: _folder, onChanged: (_) => _folderEdited = true),
-            ],
+                Row(children: [
+                  Expanded(child: IdeTextField(controller: _parent, hint: 'Parent folder')),
+                  const SizedBox(width: 6),
+                  IdeIconButton(
+                      icon: Icons.folder_open_outlined, tooltip: 'Browse', onPressed: _browse),
+                ]),
+                const SizedBox(height: 12),
+                const Text('Folder name:'),
+                const SizedBox(height: 6),
+                IdeTextField(controller: _folder, onChanged: (_) => _folderEdited = true),
+              ],
+            ),
           ),
           actions: [
             IdeButton(label: 'Cancel', onPressed: () => Navigator.pop(context)),
@@ -163,7 +169,8 @@ class _CloneDialogState extends State<_CloneDialog> {
       scrollDirection: Axis.horizontal,
       child: Row(children: [
         tab(null, Icons.link, 'Repository URL'),
-        for (final a in accounts) tab(a.id, hostingIcon(a.kind), '${a.kind.shortLabel}: ${a.username}'),
+        for (final a in accounts)
+          tab(a.id, hostingIcon(a.kind), '${a.kind.shortLabel}: ${a.username}'),
         Builder(
           builder: (context) => IdeIconButton(
             icon: Icons.person_add_alt,
