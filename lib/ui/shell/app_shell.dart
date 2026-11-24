@@ -9,6 +9,7 @@ import '../../theme/ide_theme.dart';
 import '../../system/open_requests.dart';
 import '../settings/settings_page.dart';
 import '../commit/commit_flow.dart';
+import '../repo/operation_identity_flow.dart';
 import '../console/console_panel.dart';
 import '../format.dart';
 import '../views/account_view.dart';
@@ -18,12 +19,16 @@ import 'main_toolbar.dart';
 import 'repo_flows.dart';
 import 'sidebar.dart';
 import 'status_bar.dart';
+import 'task_center_panel.dart';
 
 /// Main window: toolbar, repository sidebar, the selected repository's view,
 /// an optional Git console and the status bar.
 class AppShell extends StatefulWidget {
   const AppShell(
-      {super.key, required this.repos, required this.settings, required this.openRequests});
+      {super.key,
+      required this.repos,
+      required this.settings,
+      required this.openRequests});
 
   final ReposState repos;
   final AppSettings settings;
@@ -35,6 +40,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   var _showConsole = false;
+  var _showTasks = false;
   late final AppLifecycleListener _lifecycle;
 
   ReposState get repos => widget.repos;
@@ -79,7 +85,8 @@ class _AppShellState extends State<AppShell> {
     if (ctrl == null) return;
     repos.select(ctrl);
     ctrl.setView(RepoView.changes);
-    WidgetsBinding.instance.addPostFrameCallback((_) => ctrl.messageFocus.requestFocus());
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => ctrl.messageFocus.requestFocus());
   }
 
   Map<ShortcutActivator, VoidCallback> get _shortcuts {
@@ -90,19 +97,24 @@ class _AppShellState extends State<AppShell> {
     return {
       primary(LogicalKeyboardKey.keyK): _focusCommit,
       primary(LogicalKeyboardKey.keyT): () => ctrl()?.pull(),
-      primary(LogicalKeyboardKey.keyK, shift: true): () => ctrl()?.push(),
+      primary(LogicalKeyboardKey.keyK, shift: true): () {
+        final r = ctrl();
+        if (r != null) pushFlow(context, r);
+      },
       primary(LogicalKeyboardKey.enter): () {
         final r = ctrl();
         if (r != null) commitFlow(context, r);
       },
       for (final v in RepoView.values)
-        primary(LogicalKeyboardKey(LogicalKeyboardKey.digit1.keyId + v.index)): () {
+        primary(LogicalKeyboardKey(LogicalKeyboardKey.digit1.keyId + v.index)):
+            () {
           final r = ctrl();
           if (r == null) return;
           repos.select(r);
           r.setView(v);
         },
-      primary(LogicalKeyboardKey.backquote): () => setState(() => _showConsole = !_showConsole),
+      primary(LogicalKeyboardKey.backquote): () =>
+          setState(() => _showConsole = !_showConsole),
       const SingleActivator(LogicalKeyboardKey.f5): repos.refreshAll,
       primary(LogicalKeyboardKey.comma): () => showSettingsPage(context, repos),
     };
@@ -123,7 +135,10 @@ class _AppShellState extends State<AppShell> {
               final ctrl = repos.current;
               return Stack(children: [
                 Column(children: [
-                  MainToolbar(repos: repos, settings: widget.settings, onCommit: _focusCommit),
+                  MainToolbar(
+                      repos: repos,
+                      settings: widget.settings,
+                      onCommit: _focusCommit),
                   Container(height: 1, color: c.splitter),
                   Expanded(
                     child: SplitPane(
@@ -138,18 +153,22 @@ class _AppShellState extends State<AppShell> {
                     ),
                   ),
                   Container(height: 1, color: c.splitter),
-                  if (ctrl != null)
-                    StatusBar(
-                      ctrl: ctrl,
-                      consoleVisible: _showConsole,
-                      onToggleConsole: () => setState(() => _showConsole = !_showConsole),
-                      onBranchTap: () {
-                        repos.select(ctrl);
-                        ctrl.setView(RepoView.branches);
-                      },
-                    )
-                  else
-                    const SizedBox(height: 26),
+                  StatusBar(
+                    ctrl: ctrl,
+                    tasks: repos.tasks,
+                    consoleVisible: _showConsole,
+                    onToggleConsole: () =>
+                        setState(() => _showConsole = !_showConsole),
+                    tasksVisible: _showTasks,
+                    onToggleTasks: () =>
+                        setState(() => _showTasks = !_showTasks),
+                    onBranchTap: () {
+                      final current = repos.current;
+                      if (current == null) return;
+                      repos.select(current);
+                      current.setView(RepoView.branches);
+                    },
+                  ),
                 ]),
                 if (ctrl != null)
                   Positioned(
@@ -158,8 +177,19 @@ class _AppShellState extends State<AppShell> {
                     child: _Notifications(
                       ctrl: ctrl,
                       onAction: (a) => a == NotificationAction.networkSettings
-                          ? showSettingsPage(context, repos, section: SettingsSection.network)
-                          : showSettingsPage(context, repos, section: SettingsSection.accounts),
+                          ? showSettingsPage(context, repos,
+                              section: SettingsSection.network)
+                          : showSettingsPage(context, repos,
+                              section: SettingsSection.accounts),
+                    ),
+                  ),
+                if (_showTasks)
+                  Positioned(
+                    right: 12,
+                    bottom: 34,
+                    child: TaskCenterPanel(
+                      tasks: repos.tasks,
+                      onClose: () => setState(() => _showTasks = false),
                     ),
                   ),
               ]);
@@ -174,7 +204,8 @@ class _AppShellState extends State<AppShell> {
   Widget _main(RepoController? ctrl) {
     final account = repos.account;
     if (account != null || ctrl == null) {
-      return AccountView(key: ValueKey(account!.id), account: account, repos: repos);
+      return AccountView(
+          key: ValueKey(account!.id), account: account, repos: repos);
     }
     final view = RepoMain(key: ObjectKey(ctrl), ctrl: ctrl, repos: repos);
     if (!_showConsole) return view;
@@ -219,10 +250,13 @@ class _EmptyState extends StatelessWidget {
             child: const Icon(Icons.call_split, color: Colors.white, size: 30),
           ),
           const SizedBox(height: 16),
-          Text('Welcome to EasyGit', style: Theme.of(context).textTheme.titleMedium),
+          Text('Welcome to EasyGit',
+              style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 6),
-          Text('Add a repository to get started. You can keep several in the sidebar.',
-              textAlign: TextAlign.center, style: TextStyle(color: c.textSecondary)),
+          Text(
+              'Add a repository to get started. You can keep several in the sidebar.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: c.textSecondary)),
           if (!GitRunner.isSupported) ...[
             const SizedBox(height: 14),
             Container(
@@ -238,18 +272,23 @@ class _EmptyState extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 20),
-          Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center, children: [
-            IdeButton(
-                label: 'Open Local Repository',
-                primary: true,
-                onPressed: () => openRepositoryFlow(context, repos)),
-            IdeButton(
-                label: 'Clone Repository', onPressed: () => cloneRepositoryFlow(context, repos)),
-            IdeButton(
-                label: 'Accounts',
-                onPressed: () =>
-                    showSettingsPage(context, repos, section: SettingsSection.accounts)),
-          ]),
+          Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                IdeButton(
+                    label: 'Open Local Repository',
+                    primary: true,
+                    onPressed: () => openRepositoryFlow(context, repos)),
+                IdeButton(
+                    label: 'Clone Repository',
+                    onPressed: () => cloneRepositoryFlow(context, repos)),
+                IdeButton(
+                    label: 'Accounts',
+                    onPressed: () => showSettingsPage(context, repos,
+                        section: SettingsSection.accounts)),
+              ]),
         ]),
       ),
     );
@@ -281,43 +320,56 @@ class _Notifications extends StatelessWidget {
                 color: c.popupBg,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: c.border),
-                boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 12)],
+                boxShadow: const [
+                  BoxShadow(color: Colors.black38, blurRadius: 12)
+                ],
               ),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Icon(n.isError ? Icons.error_outline : Icons.check_circle_outline,
-                    size: 18, color: n.isError ? c.error : c.success),
+              child:
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(
+                    n.isError
+                        ? Icons.error_outline
+                        : Icons.check_circle_outline,
+                    size: 18,
+                    color: n.isError ? c.error : c.success),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(n.title, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    if (n.hint != null) ...[
-                      const SizedBox(height: 4),
-                      Text(n.hint!, style: const TextStyle(fontSize: 12.5)),
-                    ],
-                    if (n.action != null) ...[
-                      const SizedBox(height: 6),
-                      IdeButton(
-                        label: switch (n.action!) {
-                          NotificationAction.networkSettings => 'Network Settings...',
-                          NotificationAction.accounts => 'Accounts...',
-                        },
-                        onPressed: () {
-                          ctrl.dismissNotification(n.id);
-                          onAction(n.action!);
-                        },
-                      ),
-                    ],
-                    if (n.message.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 160),
-                        child: SingleChildScrollView(
-                          child: SelectableText(n.message,
-                              style: TextStyle(fontSize: 12, color: c.textSecondary)),
-                        ),
-                      ),
-                    ],
-                  ]),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(n.title,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w600)),
+                        if (n.hint != null) ...[
+                          const SizedBox(height: 4),
+                          Text(n.hint!, style: const TextStyle(fontSize: 12.5)),
+                        ],
+                        if (n.action != null) ...[
+                          const SizedBox(height: 6),
+                          IdeButton(
+                            label: switch (n.action!) {
+                              NotificationAction.networkSettings =>
+                                'Network Settings...',
+                              NotificationAction.accounts => 'Accounts...',
+                            },
+                            onPressed: () {
+                              ctrl.dismissNotification(n.id);
+                              onAction(n.action!);
+                            },
+                          ),
+                        ],
+                        if (n.message.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxHeight: 160),
+                            child: SingleChildScrollView(
+                              child: SelectableText(n.message,
+                                  style: TextStyle(
+                                      fontSize: 12, color: c.textSecondary)),
+                            ),
+                          ),
+                        ],
+                      ]),
                 ),
                 IdeIconButton(
                   icon: Icons.close,

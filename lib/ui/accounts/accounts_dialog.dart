@@ -221,8 +221,7 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
           const SizedBox(height: 12),
           Text(kind.hasApi ? 'Personal access token:' : 'Password or token:'),
           const SizedBox(height: 6),
-          _TokenField(controller: _token, onSubmitted: _submit),
-          const SizedBox(height: 6),
+          IdeSecretField(controller: _token, onSubmitted: _submit, autofocus: true),          const SizedBox(height: 6),
           if (!kind.hasApi)
             Text(HostingApi.tokenScopesHint(kind),
                 style: TextStyle(fontSize: 12, color: c.textSecondary))
@@ -260,41 +259,6 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
         IdeButton(label: 'Cancel', onPressed: () => Navigator.pop(context)),
         IdeButton(label: 'Log In', primary: true, onPressed: _busy ? null : _submit),
       ],
-    );
-  }
-}
-
-class _TokenField extends StatelessWidget {
-  const _TokenField({required this.controller, required this.onSubmitted});
-
-  final TextEditingController controller;
-  final VoidCallback onSubmitted;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = IdeColors.of(context);
-    final border = OutlineInputBorder(
-      borderRadius: BorderRadius.circular(5),
-      borderSide: BorderSide(color: c.buttonBorder),
-    );
-    return SizedBox(
-      height: 28,
-      child: TextField(
-        controller: controller,
-        obscureText: true,
-        autofocus: true,
-        onSubmitted: (_) => onSubmitted(),
-        style: TextStyle(fontSize: 13, color: c.text),
-        decoration: InputDecoration(
-          isDense: true,
-          filled: true,
-          fillColor: c.inputBg,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          border: border,
-          enabledBorder: border,
-          focusedBorder: border.copyWith(borderSide: BorderSide(color: c.accent, width: 2)),
-        ),
-      ),
     );
   }
 }

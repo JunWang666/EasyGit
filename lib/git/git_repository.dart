@@ -9,7 +9,8 @@ enum ResetMode { soft, mixed, hard, keep }
 
 /// Commit author settings of a repository.
 class RepoIdentity {
-  const RepoIdentity({this.localName, this.localEmail, this.globalName, this.globalEmail});
+  const RepoIdentity(
+      {this.localName, this.localEmail, this.globalName, this.globalEmail});
 
   /// Set in the repository's own config; null when it uses the global one.
   final String? localName;
@@ -33,33 +34,48 @@ class GitRepository {
   final String gitDir;
   final GitRunner _git;
 
-  set onLog(void Function(GitCommandLog log)? callback) => _git.onLog = callback;
+  set onLog(void Function(GitCommandLog log)? callback) =>
+      _git.onLog = callback;
 
   /// HTTPS credentials for this repository only (null: all signed-in accounts).
-  set credentialOverride(List<GitCredential>? value) => _git.credentialOverride = value;
+  set credentialOverride(List<GitCredential>? value) =>
+      _git.credentialOverride = value;
 
-  String get name => root.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).lastOrNull ?? root;
+  /// Credentials used by git-lfs for this repository's LFS server only.
+  set lfsCredentials(List<GitCredential> value) => _git.lfsCredentials = value;
+
+  String get name =>
+      root.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).lastOrNull ??
+      root;
 
   /// Opens the repository that contains [dir].
   static Future<GitRepository> open(String dir) async {
-    final root = (await GitRunner(dir).run(['rev-parse', '--show-toplevel'])).trim();
-    final gitDir = (await GitRunner(root).run(['rev-parse', '--absolute-git-dir'])).trim();
+    final root =
+        (await GitRunner(dir).run(['rev-parse', '--show-toplevel'])).trim();
+    final gitDir =
+        (await GitRunner(root).run(['rev-parse', '--absolute-git-dir'])).trim();
     return GitRepository._(root, gitDir, GitRunner(root));
   }
 
   static Future<void> init(String dir) => GitRunner(dir).run(['init']);
 
   static Future<void> clone(String url, String parentDir, String folder,
-      {List<GitCredential>? credentials}) {
+      {List<GitCredential>? credentials, void Function(String)? onProgress}) {
     final git = GitRunner(parentDir)..credentialOverride = credentials;
-    return git.run(['clone', url, folder]);
+    return git.run(['clone', '--progress', url, folder],
+        log: true, onStdout: onProgress, onStderr: onProgress);
   }
 
   // ---------------------------------------------------------------- status
 
   Future<RepoStatus> status() async {
-    final out =
-        await _git.run(['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all']);
+    final out = await _git.run([
+      'status',
+      '--porcelain=v2',
+      '--branch',
+      '-z',
+      '--untracked-files=all'
+    ]);
     final parts = out.split('\x00');
     String? branch;
     String? oid;
@@ -100,10 +116,13 @@ class GitRepository {
         changes.add(_change(f.fields[1], f.rest, oldPath: orig));
       } else if (type == 'u') {
         final f = _splitFields(line, 10);
-        changes.add(FileChange(path: f.rest, kind: ChangeKind.conflicted, unstaged: true));
+        changes.add(FileChange(
+            path: f.rest, kind: ChangeKind.conflicted, unstaged: true));
       } else if (type == '?') {
-        changes
-            .add(FileChange(path: line.substring(2), kind: ChangeKind.untracked, unstaged: true));
+        changes.add(FileChange(
+            path: line.substring(2),
+            kind: ChangeKind.untracked,
+            unstaged: true));
       }
     }
     changes.sort((a, b) => a.path.compareTo(b.path));
@@ -151,7 +170,11 @@ class GitRepository {
       kind = ChangeKind.modified;
     }
     return FileChange(
-        path: path, oldPath: oldPath, kind: kind, staged: x != '.', unstaged: y != '.');
+        path: path,
+        oldPath: oldPath,
+        kind: kind,
+        staged: x != '.',
+        unstaged: y != '.');
   }
 
   Future<RepoState> _repoState() async {
@@ -160,7 +183,8 @@ class GitRepository {
         await Directory('$gitDir/rebase-apply').exists()) {
       return RepoState.rebasing;
     }
-    if (await File('$gitDir/CHERRY_PICK_HEAD').exists()) return RepoState.cherryPicking;
+    if (await File('$gitDir/CHERRY_PICK_HEAD').exists())
+      return RepoState.cherryPicking;
     if (await File('$gitDir/REVERT_HEAD').exists()) return RepoState.reverting;
     return RepoState.normal;
   }
@@ -203,8 +227,12 @@ class GitRepository {
         hash: f[2].isNotEmpty ? f[2] : f[1],
         type: type,
         upstream: f[3].isEmpty ? null : f[3],
-        ahead: int.tryParse(RegExp(r'ahead (\d+)').firstMatch(track)?[1] ?? '') ?? 0,
-        behind: int.tryParse(RegExp(r'behind (\d+)').firstMatch(track)?[1] ?? '') ?? 0,
+        ahead:
+            int.tryParse(RegExp(r'ahead (\d+)').firstMatch(track)?[1] ?? '') ??
+                0,
+        behind:
+            int.tryParse(RegExp(r'behind (\d+)').firstMatch(track)?[1] ?? '') ??
+                0,
         upstreamGone: track.contains('gone'),
         isHead: f[5] == '*',
         date: f.length > 6 && int.tryParse(f[6]) != null
@@ -218,7 +246,10 @@ class GitRepository {
 
   Future<List<String>> remotes() async {
     final out = await _git.run(['remote']);
-    return const LineSplitter().convert(out).where((s) => s.trim().isNotEmpty).toList();
+    return const LineSplitter()
+        .convert(out)
+        .where((s) => s.trim().isNotEmpty)
+        .toList();
   }
 
   /// Fetch URL of each remote, in `git remote` order.
@@ -241,13 +272,18 @@ class GitRepository {
   Future<void> renameRemote(String from, String to) =>
       _git.run(['remote', 'rename', from, to], log: true);
 
-  Future<void> removeRemote(String name) => _git.run(['remote', 'remove', name], log: true);
+  Future<void> removeRemote(String name) =>
+      _git.run(['remote', 'remove', name], log: true);
 
   /// The remote's default branch (`main`), if `refs/remotes/<remote>/HEAD` is known.
   Future<String?> remoteDefaultBranch(String remote) async {
     try {
-      final out = (await _git.run(['symbolic-ref', '--short', 'refs/remotes/$remote/HEAD'])).trim();
-      return out.startsWith('$remote/') ? out.substring(remote.length + 1) : null;
+      final out = (await _git
+              .run(['symbolic-ref', '--short', 'refs/remotes/$remote/HEAD']))
+          .trim();
+      return out.startsWith('$remote/')
+          ? out.substring(remote.length + 1)
+          : null;
     } on GitException {
       return null;
     }
@@ -268,7 +304,13 @@ class GitRepository {
         '--format=$_logFormat',
         '-n',
         '$limit',
-        if (branch == null) ...['--branches', '--remotes', '--tags', 'HEAD'] else branch,
+        if (branch == null) ...[
+          '--branches',
+          '--remotes',
+          '--tags',
+          'HEAD'
+        ] else
+          branch,
         '--',
       ]);
     } on GitException {
@@ -287,7 +329,8 @@ class GitRepository {
         parents: f[1].trim().isEmpty ? const [] : f[1].trim().split(' '),
         author: f[2],
         email: f[3],
-        date: DateTime.fromMillisecondsSinceEpoch((int.tryParse(f[4]) ?? 0) * 1000),
+        date: DateTime.fromMillisecondsSinceEpoch(
+            (int.tryParse(f[4]) ?? 0) * 1000),
         refs: parseDecorations(f[5]),
         subject: f[6],
       ));
@@ -312,7 +355,8 @@ class GitRepository {
       }
       if (part.startsWith('tag: ')) part = part.substring(5);
       if (part.startsWith('refs/heads/')) {
-        labels.add(RefLabel(part.substring(11), RefLabelType.local, isCurrent: current));
+        labels.add(RefLabel(part.substring(11), RefLabelType.local,
+            isCurrent: current));
       } else if (part.startsWith('refs/remotes/')) {
         if (part.endsWith('/HEAD')) continue;
         labels.add(RefLabel(part.substring(13), RefLabelType.remote));
@@ -339,13 +383,15 @@ class GitRepository {
       hash,
     ]);
     final f = out.split('\x1f');
-    if (f.length < 10) throw GitException('git show $hash', 'Unexpected output');
+    if (f.length < 10)
+      throw GitException('git show $hash', 'Unexpected output');
     final info = CommitInfo(
       hash: f[0].trim(),
       parents: f[1].trim().isEmpty ? const [] : f[1].trim().split(' '),
       author: f[2],
       email: f[3],
-      date: DateTime.fromMillisecondsSinceEpoch((int.tryParse(f[4]) ?? 0) * 1000),
+      date:
+          DateTime.fromMillisecondsSinceEpoch((int.tryParse(f[4]) ?? 0) * 1000),
       refs: parseDecorations(f[5]),
       subject: f[6],
     );
@@ -364,7 +410,8 @@ class GitRepository {
       info: info,
       body: f[7].trim(),
       committer: f[8],
-      commitDate: DateTime.fromMillisecondsSinceEpoch((int.tryParse(f[9].trim()) ?? 0) * 1000),
+      commitDate: DateTime.fromMillisecondsSinceEpoch(
+          (int.tryParse(f[9].trim()) ?? 0) * 1000),
       files: parseNameStatus(files),
     );
   }
@@ -382,12 +429,15 @@ class GitRepository {
       final letter = s[0];
       if (letter == 'R' || letter == 'C') {
         if (i + 2 >= p.length) break;
-        result
-            .add(FileChange(path: p[i + 2], oldPath: p[i + 1], kind: changeKindFromLetter(letter)));
+        result.add(FileChange(
+            path: p[i + 2],
+            oldPath: p[i + 1],
+            kind: changeKindFromLetter(letter)));
         i += 3;
       } else {
         if (i + 1 >= p.length) break;
-        result.add(FileChange(path: p[i + 1], kind: changeKindFromLetter(letter)));
+        result.add(
+            FileChange(path: p[i + 1], kind: changeKindFromLetter(letter)));
         i += 2;
       }
     }
@@ -413,28 +463,68 @@ class GitRepository {
     return const Utf8Decoder(allowMalformed: true).convert(bytes);
   }
 
-  Future<String> lastCommitMessage() async => (await _git.run(['log', '-1', '--format=%B'])).trim();
+  /// Size of a file in the working tree, or null if it does not exist.
+  Future<int?> workingFileSize(String path) async {
+    final file = File('$root/$path');
+    if (!await file.exists()) return null;
+    return file.length();
+  }
+
+  /// Writes a working-tree file as UTF-8, creating its folders.
+  Future<void> writeWorkingFile(String path, String content) async {
+    final file = File('$root/$path');
+    await file.parent.create(recursive: true);
+    await file.writeAsString(content, flush: true);
+  }
+
+  /// Deletes a working-tree file; a file that is already gone is fine.
+  Future<void> deleteWorkingFile(String path) async {
+    final file = File('$root/$path');
+    if (await file.exists()) await file.delete();
+  }
+
+  Future<String> lastCommitMessage() async =>
+      (await _git.run(['log', '-1', '--format=%B'])).trim();
 
   // ---------------------------------------------------------------- local changes
 
   /// Commits exactly [files] (like the IDE's commit dialog: no staging area).
-  Future<void> commit(String message, List<FileChange> files, {bool amend = false}) async {
+  /// A supplied identity applies to this commit only, not to Git configuration.
+  Future<void> commit(String message, List<FileChange> files,
+      {bool amend = false, String? authorName, String? authorEmail}) async {
     final untracked = [
       for (final f in files)
         if (f.isUntracked) f.path
     ];
-    if (untracked.isNotEmpty) await _git.run(['add', '--', ...untracked], log: true);
+    if (untracked.isNotEmpty)
+      await _git.run(['add', '--', ...untracked], log: true);
     final paths = <String>{
       for (final f in files) ...[f.path, if (f.oldPath != null) f.oldPath!],
     };
+    final hasIdentity = authorName != null || authorEmail != null;
     await _git.run([
       'commit',
       if (amend) '--amend',
+      if (amend && hasIdentity) '--reset-author',
       if (paths.isEmpty) '--only',
       '-F',
       '-',
       if (paths.isNotEmpty) ...['--', ...paths],
-    ], stdin: message, log: true);
+    ],
+        stdin: message,
+        log: true,
+        env: hasIdentity
+            ? {
+                if (authorName != null) ...{
+                  'GIT_AUTHOR_NAME': authorName,
+                  'GIT_COMMITTER_NAME': authorName,
+                },
+                if (authorEmail != null) ...{
+                  'GIT_AUTHOR_EMAIL': authorEmail,
+                  'GIT_COMMITTER_EMAIL': authorEmail,
+                },
+              }
+            : null);
   }
 
   /// Reverts local changes of [files] to HEAD.
@@ -456,15 +546,23 @@ class GitRepository {
       }
     }
     if (unstage.isNotEmpty) {
-      await _git.run(['rm', '--cached', '--quiet', '-r', '--', ...unstage], log: true);
+      await _git.run(['rm', '--cached', '--quiet', '-r', '--', ...unstage],
+          log: true);
     }
     if (restore.isNotEmpty) {
-      await _git
-          .run(['restore', '--source=HEAD', '--staged', '--worktree', '--', ...restore], log: true);
+      await _git.run([
+        'restore',
+        '--source=HEAD',
+        '--staged',
+        '--worktree',
+        '--',
+        ...restore
+      ], log: true);
     }
   }
 
-  Future<void> addToVcs(List<String> paths) => _git.run(['add', '--', ...paths], log: true);
+  Future<void> addToVcs(List<String> paths) =>
+      _git.run(['add', '--', ...paths], log: true);
 
   Future<void> stash(String message) => _git.run([
         'stash',
@@ -476,19 +574,24 @@ class GitRepository {
   Future<void> stashPop([String? ref]) =>
       _git.run(['stash', 'pop', if (ref != null) ref], log: true);
 
-  Future<void> stashApply(String ref) => _git.run(['stash', 'apply', ref], log: true);
+  Future<void> stashApply(String ref) =>
+      _git.run(['stash', 'apply', ref], log: true);
 
-  Future<void> stashDrop(String ref) => _git.run(['stash', 'drop', ref], log: true);
+  Future<void> stashDrop(String ref) =>
+      _git.run(['stash', 'drop', ref], log: true);
 
   Future<List<StashEntry>> stashes() async {
-    final out = await _git.run(['stash', 'list', '--format=%gd%x1f%H%x1f%ct%x1f%s']);
+    final out =
+        await _git.run(['stash', 'list', '--format=%gd%x1f%H%x1f%ct%x1f%s']);
     return [
       for (final line in const LineSplitter().convert(out))
-        if (line.split('\x1f') case [final ref, final hash, final time, final message, ...])
+        if (line.split('\x1f')
+            case [final ref, final hash, final time, final message, ...])
           StashEntry(
             ref: ref,
             hash: hash,
-            date: DateTime.fromMillisecondsSinceEpoch((int.tryParse(time) ?? 0) * 1000),
+            date: DateTime.fromMillisecondsSinceEpoch(
+                (int.tryParse(time) ?? 0) * 1000),
             message: message,
           ),
     ];
@@ -541,7 +644,9 @@ class GitRepository {
 
   /// Adds a worktree at [path]. With [newBranch], creates that branch from
   /// [commitish]; otherwise checks out [commitish] (an existing branch).
-  Future<void> addWorktree(String path, String commitish, {String? newBranch}) => _git.run([
+  Future<void> addWorktree(String path, String commitish,
+          {String? newBranch}) =>
+      _git.run([
         'worktree',
         'add',
         if (newBranch != null) ...['-b', newBranch],
@@ -556,39 +661,55 @@ class GitRepository {
 
   // ---------------------------------------------------------------- remotes
 
-  Future<void> fetch() => _git.run(['fetch', '--all', '--prune'], log: true);
+  Future<void> fetch({void Function(String)? onProgress}) =>
+      _git.run(['fetch', '--all', '--prune', '--progress'],
+          log: true, onStdout: onProgress, onStderr: onProgress);
 
-  Future<void> pull({bool rebase = false}) =>
-      _git.run(['pull', '--no-edit', if (rebase) '--rebase'], log: true);
+  Future<void> pull({bool rebase = false, void Function(String)? onProgress}) =>
+      _git.run(['pull', '--no-edit', '--progress', if (rebase) '--rebase'],
+          log: true, onStdout: onProgress, onStderr: onProgress);
 
   /// Pushes the current branch, setting an upstream on first push.
-  Future<void> push({bool force = false}) async {
+  Future<void> push(
+      {bool force = false, void Function(String)? onProgress}) async {
     final st = await status();
     if (st.branch == null) {
       throw const GitException('git push', 'Cannot push: HEAD is detached.');
     }
+    final env = const {'GIT_LFS_FORCE_PROGRESS': '1'};
     if (st.upstream != null) {
-      await _git.run(['push', if (force) '--force-with-lease'], log: true);
+      await _git.run(['push', '--progress', if (force) '--force-with-lease'],
+          log: true, env: env, onStdout: onProgress, onStderr: onProgress);
       return;
     }
-    await _git.run(['push', '-u', await _defaultRemote(), st.branch!], log: true);
+    await _git.run(
+        ['push', '--progress', '-u', await _defaultRemote(), st.branch!],
+        log: true, env: env, onStdout: onProgress, onStderr: onProgress);
   }
 
-  Future<void> pushBranch(GitRef ref) async {
+  Future<void> pushBranch(GitRef ref,
+      {void Function(String)? onProgress}) async {
     final upstream = ref.upstream;
+    final env = const {'GIT_LFS_FORCE_PROGRESS': '1'};
     if (upstream != null && upstream.contains('/')) {
       final slash = upstream.indexOf('/');
-      await _git.run(
-          ['push', upstream.substring(0, slash), '${ref.name}:${upstream.substring(slash + 1)}'],
-          log: true);
+      await _git.run([
+        'push',
+        '--progress',
+        upstream.substring(0, slash),
+        '${ref.name}:${upstream.substring(slash + 1)}'
+      ], log: true, env: env, onStdout: onProgress, onStderr: onProgress);
     } else {
-      await _git.run(['push', '-u', await _defaultRemote(), ref.name], log: true);
+      await _git.run(
+          ['push', '--progress', '-u', await _defaultRemote(), ref.name],
+          log: true, env: env, onStdout: onProgress, onStderr: onProgress);
     }
   }
 
   Future<String> _defaultRemote() async {
     final all = await remotes();
-    if (all.isEmpty) throw const GitException('git push', 'No remote is configured.');
+    if (all.isEmpty)
+      throw const GitException('git push', 'No remote is configured.');
     return all.contains('origin') ? 'origin' : all.first;
   }
 
@@ -619,10 +740,10 @@ class GitRepository {
   Future<RepoIdentity> identity() async => RepoIdentity(
         localName: await _config(['--local'], 'user.name'),
         localEmail: await _config(['--local'], 'user.email'),
-        globalName:
-            await _config(['--global'], 'user.name') ?? await _config(['--system'], 'user.name'),
-        globalEmail:
-            await _config(['--global'], 'user.email') ?? await _config(['--system'], 'user.email'),
+        globalName: await _config(['--global'], 'user.name') ??
+            await _config(['--system'], 'user.name'),
+        globalEmail: await _config(['--global'], 'user.email') ??
+            await _config(['--system'], 'user.email'),
       );
 
   /// Sets the author identity for this repository; null or empty values fall
@@ -642,7 +763,8 @@ class GitRepository {
 
   Future<void> checkout(String ref) => _git.run(['checkout', ref], log: true);
 
-  Future<void> checkoutRevision(String rev) => _git.run(['checkout', '--detach', rev], log: true);
+  Future<void> checkoutRevision(String rev) =>
+      _git.run(['checkout', '--detach', rev], log: true);
 
   /// Checks out a remote branch, creating a tracking local branch if needed.
   Future<void> checkoutRemote(GitRef remote, List<GitRef> all) async {
@@ -651,12 +773,17 @@ class GitRepository {
     if (exists) {
       await checkout(local);
     } else {
-      await _git.run(['checkout', '-b', local, '--track', remote.name], log: true);
+      await _git
+          .run(['checkout', '-b', local, '--track', remote.name], log: true);
     }
   }
 
-  Future<void> createBranch(String name, String startPoint, {required bool checkout}) =>
-      _git.run(checkout ? ['checkout', '-b', name, startPoint] : ['branch', name, startPoint],
+  Future<void> createBranch(String name, String startPoint,
+          {required bool checkout}) =>
+      _git.run(
+          checkout
+              ? ['checkout', '-b', name, startPoint]
+              : ['branch', name, startPoint],
           log: true);
 
   Future<void> renameBranch(String from, String to) =>
@@ -664,13 +791,16 @@ class GitRepository {
 
   Future<void> deleteBranch(GitRef ref, {bool force = false}) {
     if (ref.type == RefType.remote) {
-      return _git.run(['push', ref.remote, '--delete', ref.branchName], log: true);
+      return _git
+          .run(['push', ref.remote, '--delete', ref.branchName], log: true);
     }
-    if (ref.type == RefType.tag) return _git.run(['tag', '-d', ref.name], log: true);
+    if (ref.type == RefType.tag)
+      return _git.run(['tag', '-d', ref.name], log: true);
     return _git.run(['branch', force ? '-D' : '-d', ref.name], log: true);
   }
 
-  Future<void> merge(String ref) => _git.run(['merge', '--no-edit', ref], log: true);
+  Future<void> merge(String ref) =>
+      _git.run(['merge', '--no-edit', ref], log: true);
 
   Future<void> rebase(String onto) => _git.run(['rebase', onto], log: true);
 
@@ -698,14 +828,17 @@ class GitRepository {
 
   // ---------------------------------------------------------------- commits
 
-  Future<void> cherryPick(String hash) => _git.run(['cherry-pick', hash], log: true);
+  Future<void> cherryPick(String hash) =>
+      _git.run(['cherry-pick', hash], log: true);
 
-  Future<void> revert(String hash) => _git.run(['revert', '--no-edit', hash], log: true);
+  Future<void> revert(String hash) =>
+      _git.run(['revert', '--no-edit', hash], log: true);
 
   Future<void> reset(String hash, ResetMode mode) =>
       _git.run(['reset', '--${mode.name}', hash], log: true);
 
-  Future<void> createTag(String name, String hash) => _git.run(['tag', name, hash], log: true);
+  Future<void> createTag(String name, String hash) =>
+      _git.run(['tag', name, hash], log: true);
 
   // ---------------------------------------------------------------- Git LFS
 
@@ -714,7 +847,8 @@ class GitRepository {
   /// The git-lfs version line, or null when git-lfs is not installed.
   static Future<String?> lfsVersion() => _lfsVersion ??= () async {
         try {
-          final out = await GitRunner(Directory.systemTemp.path).run(['lfs', 'version']);
+          final out = await GitRunner(Directory.systemTemp.path)
+              .run(['lfs', 'version']);
           return out.trim();
         } on GitException {
           return null;
@@ -733,7 +867,8 @@ class GitRepository {
     final file = File('$root/.gitattributes');
     if (!await file.exists()) return const [];
     return [
-      for (final line in const LineSplitter().convert(await file.readAsString()))
+      for (final line
+          in const LineSplitter().convert(await file.readAsString()))
         if (line.contains('filter=lfs') && !line.trimLeft().startsWith('#'))
           line.trim().split(RegExp(r'\s+')).first,
     ];
@@ -742,16 +877,19 @@ class GitRepository {
   /// Whether the LFS pre-push hook is installed for this repository.
   Future<bool> lfsHooksInstalled() async {
     try {
-      var path = (await _git.run(['rev-parse', '--git-path', 'hooks/pre-push'])).trim();
+      var path = (await _git.run(['rev-parse', '--git-path', 'hooks/pre-push']))
+          .trim();
       if (!File(path).isAbsolute) path = '$root/$path';
       final file = File(path);
-      return await file.exists() && (await file.readAsString()).contains('git lfs');
+      return await file.exists() &&
+          (await file.readAsString()).contains('git lfs');
     } on GitException {
       return false;
     }
   }
 
-  Future<void> lfsInstallHooks() => _git.run(['lfs', 'install', '--local'], log: true);
+  Future<void> lfsInstallHooks() =>
+      _git.run(['lfs', 'install', '--local'], log: true);
 
   Future<List<LfsFile>> lfsFiles() async {
     try {
@@ -775,8 +913,8 @@ class GitRepository {
   Future<Set<String>> lfsTrackedPaths(Iterable<String> paths) async {
     final list = paths.toList();
     if (list.isEmpty) return const {};
-    final out = await _git
-        .run(['check-attr', '-z', '--stdin', 'filter'], stdin: '${list.join('\x00')}\x00');
+    final out = await _git.run(['check-attr', '-z', '--stdin', 'filter'],
+        stdin: '${list.join('\x00')}\x00');
     return {
       for (final e in parseCheckAttrZ(out).entries)
         if (e.value['filter'] == 'lfs') e.key,
@@ -787,22 +925,111 @@ class GitRepository {
       _git.run(['lfs', 'track', ...patterns], log: true);
 
   /// Downloads LFS content into the working tree; [paths] limits it.
-  Future<void> lfsPull([List<String>? paths]) => _git.run([
-        'lfs',
-        'pull',
-        if (paths != null && paths.isNotEmpty) '--include=${paths.map(_lfsEscape).join(',')}',
-      ], log: true);
+  Future<void> lfsPull(
+          [List<String>? paths, void Function(String)? onProgress]) =>
+      _git.run(
+          [
+            'lfs',
+            'pull',
+            if (paths != null && paths.isNotEmpty)
+              '--include=${paths.map(_lfsEscape).join(',')}',
+          ],
+          log: true,
+          env: const {'GIT_LFS_FORCE_PROGRESS': '1'},
+          onStdout: onProgress,
+          onStderr: onProgress);
+
+  /// Uploads selected local LFS objects without pushing a Git ref.
+  Future<void> lfsPush(String remote, List<String> oids,
+          {void Function(String)? onProgress}) =>
+      _git.run(['lfs', 'push', '--object-id', remote, ...oids],
+          log: true,
+          env: const {'GIT_LFS_FORCE_PROGRESS': '1'},
+          onStdout: onProgress,
+          onStderr: onProgress);
+
+  /// Replaces clean working-tree copies with pointers and deletes only their local objects.
+  /// Objects needed by an unpushed HEAD or shared with another path are retained.
+  Future<LfsCleanResult> lfsClean(
+    List<LfsFile> files, {
+    Set<String> changedPaths = const {},
+  }) async {
+    final candidates =
+        files.where((f) => f.downloaded || f.checkedOut).toList();
+    final cleanedPaths = <String>[];
+    var skipped = 0;
+    try {
+      for (final file in candidates) {
+        if (file.checkedOut) {
+          if (changedPaths.contains(file.path)) {
+            skipped++;
+            continue;
+          }
+          final text = await _git
+              .run(['lfs', 'pointer', '--file=${file.path}'], log: true);
+          final pointer = LfsPointer.parse(text);
+          if (pointer == null ||
+              pointer.oid != file.oid ||
+              pointer.size != file.size) {
+            skipped++;
+            continue;
+          }
+          await File('$root/${file.path}').writeAsString(text, flush: true);
+        }
+        cleanedPaths.add(file.path);
+      }
+      if (cleanedPaths.isEmpty) {
+        return LfsCleanResult(cleaned: 0, skipped: skipped);
+      }
+
+      final allFiles =
+          parseLfsFilesJson(await _git.run(['lfs', 'ls-files', '--json']));
+      final sharedOids = {
+        for (final file in allFiles)
+          if (!cleanedPaths.contains(file.path)) file.oid,
+      };
+      final pushed = (await _git.run(['branch', '-r', '--contains', 'HEAD']))
+          .trim()
+          .isNotEmpty;
+      if (pushed) {
+        final env = await lfsEnv();
+        final deletedOids = <String>{};
+        for (final file in candidates) {
+          if (!cleanedPaths.contains(file.path) ||
+              sharedOids.contains(file.oid) ||
+              !deletedOids.add(file.oid)) {
+            continue;
+          }
+          final path = env.objectPath(file.oid);
+          if (path == null) continue;
+          final object = File(path);
+          if (await object.exists()) await object.delete();
+        }
+      }
+    } on FileSystemException catch (e) {
+      throw GitException('git lfs clean', e.message);
+    } on FormatException catch (e) {
+      throw GitException('git lfs ls-files', e.message);
+    }
+    return LfsCleanResult(cleaned: cleanedPaths.length, skipped: skipped);
+  }
 
   /// Downloads the object of [path] as of [rev] into the local LFS store.
-  Future<void> lfsFetch(String remote, String rev, String path) =>
-      _git.run(['lfs', 'fetch', '--include=${_lfsEscape(path)}', remote, rev], log: true);
+  Future<void> lfsFetch(String remote, String rev, String path,
+          {void Function(String)? onProgress}) =>
+      _git.run(['lfs', 'fetch', '--include=${_lfsEscape(path)}', remote, rev],
+          log: true,
+          env: const {'GIT_LFS_FORCE_PROGRESS': '1'},
+          onStdout: onProgress,
+          onStderr: onProgress);
 
   static String _lfsEscape(String path) => path.replaceAll(',', r'\,');
 
   Future<LfsServerConfig> lfsServerConfig() async {
     Future<String?> get(List<String> args) async {
       try {
-        final v = (await _git.run(['config', ...args, '--get', 'lfs.url'])).trim();
+        final v =
+            (await _git.run(['config', ...args, '--get', 'lfs.url'])).trim();
         return v.isEmpty ? null : v;
       } on GitException {
         return null;
@@ -836,14 +1063,14 @@ class GitRepository {
         if (await shared.exists()) {
           await unset(['-f', '.lfsconfig']);
           // Remove the file if nothing but empty sections is left.
-          final rest = (await shared.readAsString())
-              .split('\n')
-              .where((l) => l.trim().isNotEmpty && !RegExp(r'^\s*\[.*\]\s*$').hasMatch(l));
+          final rest = (await shared.readAsString()).split('\n').where((l) =>
+              l.trim().isNotEmpty && !RegExp(r'^\s*\[.*\]\s*$').hasMatch(l));
           if (rest.isEmpty) await shared.delete();
         }
       case LfsUrlSource.shared:
         await unset(['--local']);
-        await _git.run(['config', '-f', '.lfsconfig', 'lfs.url', url], log: true);
+        await _git
+            .run(['config', '-f', '.lfsconfig', 'lfs.url', url], log: true);
       case LfsUrlSource.local:
         await _git.run(['config', '--local', 'lfs.url', url], log: true);
     }

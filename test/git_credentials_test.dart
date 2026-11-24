@@ -102,4 +102,66 @@ void main() {
       await tmp.delete(recursive: true);
     }
   });
+
+  test('credentials answer once per server, LFS first for git lfs', () {
+    const git = GitCredential('https://git.example.com', 'git-user', 'git-token');
+    const lfs = GitCredential('https://lfs.example.com', 'lfs-user', 'lfs-token');
+
+    // Different servers: both are configured, LFS first for `lfs` commands.
+    var (config, env) = GitRunner.credentialArgs(['lfs', 'pull'], const [git],
+        lfsCredentials: const [lfs]);
+    expect(env['EASYGIT_USER_0'], 'lfs-user');
+    expect(env['EASYGIT_USER_1'], 'git-user');
+    expect(
+        config.where((a) => a == 'credential.https://lfs.example.com.helper=').length,
+        1);
+    expect(
+        config.where((a) => a == 'credential.https://git.example.com.helper=').length,
+        1);
+
+    // The other network commands prefer the account.
+    (config, env) = GitRunner.credentialArgs(['push'], const [git],
+        lfsCredentials: const [lfs]);
+    expect(env['EASYGIT_USER_0'], 'git-user');
+    expect(env['EASYGIT_USER_1'], 'lfs-user');
+  });
+
+  test('a server is answered by one credential only', () {
+    const account = GitCredential('https://host.example.com', 'git-user', 'git-token');
+    const own = GitCredential('https://host.example.com', 'lfs-user', 'lfs-token');
+
+    var (config, env) =
+        GitRunner.credentialArgs(['lfs', 'push'], const [account], lfsCredentials: const [own]);
+    expect(env.length, 2, reason: 'one helper answers for the shared server');
+    expect(env['EASYGIT_USER_0'], 'lfs-user');
+    expect(config.where((a) => a == 'credential.https://host.example.com.helper=').length, 1);
+
+    (config, env) = GitRunner.credentialArgs(['fetch'], const [account], lfsCredentials: const [own]);
+    expect(env['EASYGIT_USER_0'], 'git-user');
+  });
+
+  test('commands that do not go to the network get no credentials', () {
+    final (config, env) = GitRunner.credentialArgs(['status'], const [],
+        lfsCredentials: const [GitCredential('https://lfs.example.com', 'u', 't')]);
+    expect(config, isEmpty);
+    expect(env, isEmpty);
+  });
+
+  test('LFS credentials authenticate their server', () async {
+    final tmp = await Directory.systemTemp.createTemp('easygit_lfs_credentials');
+    final server = await _AuthServer.start();
+    try {
+      final runner = GitRunner(tmp.path)
+        ..lfsCredentials = [GitCredential(server.origin, 'lfs-user', 'lfs-token')];
+      await expectLater(
+        runner.run(['ls-remote', '${server.origin}/owner/repo.git']),
+        throwsA(isA<GitException>()),
+      );
+      final expected = base64Encode(utf8.encode('lfs-user:lfs-token'));
+      expect(server.authorizations, ['Basic $expected']);
+    } finally {
+      await server.close();
+      await tmp.delete(recursive: true);
+    }
+  });
 }

@@ -359,6 +359,44 @@ class IdeTextField extends StatelessWidget {
   }
 }
 
+/// A compact single-line field for a token or a password.
+class IdeSecretField extends StatelessWidget {
+  const IdeSecretField(
+      {super.key, required this.controller, this.onSubmitted, this.autofocus = false});
+
+  final TextEditingController controller;
+  final VoidCallback? onSubmitted;
+  final bool autofocus;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = IdeColors.of(context);
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(5),
+      borderSide: BorderSide(color: c.buttonBorder),
+    );
+    return SizedBox(
+      height: 28,
+      child: TextField(
+        controller: controller,
+        obscureText: true,
+        autofocus: autofocus,
+        onSubmitted: onSubmitted == null ? null : (_) => onSubmitted!(),
+        style: TextStyle(fontSize: 13, color: c.text),
+        decoration: InputDecoration(
+          isDense: true,
+          filled: true,
+          fillColor: c.inputBg,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          border: border,
+          enabledBorder: border,
+          focusedBorder: border.copyWith(borderSide: BorderSide(color: c.accent, width: 2)),
+        ),
+      ),
+    );
+  }
+}
+
 /// A single selectable row in a list or tree.
 class ListRow extends StatelessWidget {
   const ListRow({

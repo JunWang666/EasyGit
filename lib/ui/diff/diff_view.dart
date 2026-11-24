@@ -13,9 +13,10 @@ const _gutterWidth = 48.0;
 
 /// Side-by-side or unified diff of one file, shown as an editor tab.
 class DiffView extends StatefulWidget {
-  const DiffView({super.key, required this.tab});
+  const DiffView({super.key, required this.tab, this.onClose});
 
   final DiffTab tab;
+  final VoidCallback? onClose;
 
   @override
   State<DiffView> createState() => _DiffViewState();
@@ -30,8 +31,10 @@ class _PreparedDiff {
     final ops = diffLines(a, b);
     rows = buildSideBySide(a, b, ops);
     unified = buildUnified(a, b, ops);
-    rowChanges = changeStarts<DiffRow>(rows, (r) => r.type == DiffRowType.equal);
-    unifiedChanges = changeStarts<UnifiedLine>(unified, (l) => l.type == DiffRowType.equal);
+    rowChanges =
+        changeStarts<DiffRow>(rows, (r) => r.type == DiffRowType.equal);
+    unifiedChanges =
+        changeStarts<UnifiedLine>(unified, (l) => l.type == DiffRowType.equal);
     var longest = 0;
     for (final l in a) {
       longest = math.max(longest, l.length);
@@ -71,7 +74,11 @@ class _DiffViewState extends State<DiffView> {
   void _ensureLoaded() {
     final tab = widget.tab;
     // The parent keys this widget by tab id, so only the version can change.
-    if (_future != null && _loadedId == tab.id && _loadedVersion == tab.version) return;
+    if (_future != null &&
+        _loadedId == tab.id &&
+        _loadedVersion == tab.version) {
+      return;
+    }
     _loadedId = tab.id;
     _loadedVersion = tab.version;
     _future = tab.content.then(_PreparedDiff.new);
@@ -81,7 +88,8 @@ class _DiffViewState extends State<DiffView> {
     final changes = _unifiedMode ? diff.unifiedChanges : diff.rowChanges;
     if (changes.isEmpty || !_vertical.hasClients) return;
     setState(() {
-      _currentChange = (_currentChange + direction).clamp(0, changes.length - 1);
+      _currentChange =
+          (_currentChange + direction).clamp(0, changes.length - 1);
     });
     final target = changes[_currentChange] * _lineHeight - 3 * _lineHeight;
     _vertical.animateTo(target.clamp(0.0, _vertical.position.maxScrollExtent),
@@ -96,8 +104,9 @@ class _DiffViewState extends State<DiffView> {
       future: _future,
       builder: (context, snapshot) {
         final diff = snapshot.data;
-        final changeCount =
-            diff == null ? 0 : (_unifiedMode ? diff.unifiedChanges : diff.rowChanges).length;
+        final changeCount = diff == null
+            ? 0
+            : (_unifiedMode ? diff.unifiedChanges : diff.rowChanges).length;
         return Container(
           color: c.editorBg,
           child: Column(children: [
@@ -117,8 +126,10 @@ class _DiffViewState extends State<DiffView> {
                   onPressed: diff == null ? null : () => _jump(diff, 1),
                 ),
                 const ToolbarSeparator(),
-                _modeButton('Side-by-side', !_unifiedMode, () => setState(() => _unifiedMode = false)),
-                _modeButton('Unified', _unifiedMode, () => setState(() => _unifiedMode = true)),
+                _modeButton('Side-by-side', !_unifiedMode,
+                    () => setState(() => _unifiedMode = false)),
+                _modeButton('Unified', _unifiedMode,
+                    () => setState(() => _unifiedMode = true)),
                 const ToolbarSeparator(),
                 IdeIconButton(
                   icon: Icons.refresh,
@@ -133,8 +144,17 @@ class _DiffViewState extends State<DiffView> {
                       style: TextStyle(color: c.textSecondary)),
                 ),
                 if (diff != null && !diff.binary && diff.content.lfs == null)
-                  Text(changeCount == 0 ? 'No differences' : '$changeCount difference${changeCount == 1 ? '' : 's'}',
+                  Text(
+                      changeCount == 0
+                          ? 'No differences'
+                          : '$changeCount difference${changeCount == 1 ? '' : 's'}',
                       style: TextStyle(color: c.textSecondary)),
+                if (widget.onClose != null)
+                  IdeIconButton(
+                    icon: Icons.close,
+                    tooltip: 'Close Preview',
+                    onPressed: widget.onClose,
+                  ),
                 const SizedBox(width: 12),
               ]),
             ),
@@ -167,11 +187,16 @@ class _DiffViewState extends State<DiffView> {
   }
 
   Widget _body(AsyncSnapshot<_PreparedDiff> snapshot) {
-    if (snapshot.hasError) return EmptyHint('Cannot load diff: ${snapshot.error}');
+    if (snapshot.hasError) {
+      return EmptyHint('Cannot load diff: ${snapshot.error}');
+    }
     final diff = snapshot.data;
     if (diff == null) {
       return const Center(
-          child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)));
+          child: SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2)));
     }
     final lfs = diff.content.lfs;
     if (lfs != null) {
@@ -190,7 +215,8 @@ class _DiffViewState extends State<DiffView> {
 
     final style = monoStyle(context);
     final painter = TextPainter(
-        text: TextSpan(text: 'M', style: style), textDirection: TextDirection.ltr)
+        text: TextSpan(text: 'M', style: style),
+        textDirection: TextDirection.ltr)
       ..layout();
     final charWidth = painter.width;
     painter.dispose();
@@ -199,13 +225,15 @@ class _DiffViewState extends State<DiffView> {
       final textWidth = diff.maxChars * charWidth + 24;
       final double contentWidth;
       if (_unifiedMode) {
-        contentWidth = math.max(constraints.maxWidth, _gutterWidth * 2 + 20 + textWidth);
+        contentWidth =
+            math.max(constraints.maxWidth, _gutterWidth * 2 + 20 + textWidth);
       } else {
         // Both columns must stay on screen, so side-by-side never scrolls
         // horizontally; long lines are clipped (Unified scrolls instead).
         contentWidth = constraints.maxWidth;
       }
-      final list = _unifiedMode ? _unified(diff, style) : _sideBySide(diff, style);
+      final list =
+          _unifiedMode ? _unified(diff, style) : _sideBySide(diff, style);
       return Scrollbar(
         controller: _horizontal,
         notificationPredicate: (n) => n.depth == 0,
@@ -264,7 +292,8 @@ class _DiffViewState extends State<DiffView> {
         child: Align(
           alignment: Alignment.centerLeft,
           child: Text(text,
-              style: TextStyle(fontSize: 12, color: IdeColors.of(context).textSecondary)),
+              style: TextStyle(
+                  fontSize: 12, color: IdeColors.of(context).textSecondary)),
         ),
       );
 
@@ -282,7 +311,10 @@ class _DiffViewState extends State<DiffView> {
         const SizedBox(width: 10),
         Expanded(
           child: Text((text ?? '').replaceAll('\t', '    '),
-              maxLines: 1, softWrap: false, overflow: TextOverflow.clip, style: style),
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.clip,
+              style: style),
         ),
       ]),
     );
@@ -307,14 +339,22 @@ class _DiffViewState extends State<DiffView> {
           child: Row(children: [
             SizedBox(
                 width: _gutterWidth,
-                child: Text(line.oldNo?.toString() ?? '', textAlign: TextAlign.right, style: gutter)),
+                child: Text(line.oldNo?.toString() ?? '',
+                    textAlign: TextAlign.right, style: gutter)),
             SizedBox(
                 width: _gutterWidth,
-                child: Text(line.newNo?.toString() ?? '', textAlign: TextAlign.right, style: gutter)),
-            SizedBox(width: 20, child: Text(prefix, textAlign: TextAlign.center, style: gutter)),
+                child: Text(line.newNo?.toString() ?? '',
+                    textAlign: TextAlign.right, style: gutter)),
+            SizedBox(
+                width: 20,
+                child:
+                    Text(prefix, textAlign: TextAlign.center, style: gutter)),
             Expanded(
               child: Text(line.text.replaceAll('\t', '    '),
-                  maxLines: 1, softWrap: false, overflow: TextOverflow.clip, style: style),
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.clip,
+                  style: style),
             ),
           ]),
         );

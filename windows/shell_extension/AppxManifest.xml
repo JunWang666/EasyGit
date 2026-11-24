@@ -20,7 +20,7 @@
   xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
   xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
   IgnorableNamespaces="uap uap10 rescap desktop4 desktop5 com">
-  <Identity Name="EasyGit.ExplorerMenu" Publisher="CN=EasyGit" Version="0.2.0.0"
+  <Identity Name="EasyGit.ExplorerMenu" Publisher="CN=EasyGit" Version="0.3.1.0"
             ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>EasyGit Explorer menu</DisplayName>

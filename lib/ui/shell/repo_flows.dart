@@ -5,14 +5,15 @@ import 'package:flutter/material.dart';
 
 import '../../git/git_repository.dart';
 import '../../git/models.dart';
+import '../../git/progress.dart';
 import '../../state/repos_state.dart';
-import '../../theme/ide_theme.dart';
 import 'clone_dialog.dart';
 import '../widgets/dialogs.dart';
 
 /// Adds the repository at [path] to the sidebar, offering `git init` when the
 /// folder is not a repository yet.
-Future<void> openRepositoryAt(BuildContext context, ReposState repos, String path,
+Future<void> openRepositoryAt(
+    BuildContext context, ReposState repos, String path,
     {String? accountId}) async {
   try {
     final ctrl = await repos.open(path);
@@ -20,12 +21,14 @@ Future<void> openRepositoryAt(BuildContext context, ReposState repos, String pat
   } on GitException catch (e) {
     if (!context.mounted) return;
     if (!e.message.contains('not a git repository')) {
-      await showConfirmDialog(context, title: 'Cannot Open Repository', message: e.message);
+      await showConfirmDialog(context,
+          title: 'Cannot Open Repository', message: e.message);
       return;
     }
     final init = await showConfirmDialog(context,
         title: 'Not a Git Repository',
-        message: '$path is not a Git repository.\n\nCreate a new repository there?',
+        message:
+            '$path is not a Git repository.\n\nCreate a new repository there?',
         okLabel: 'Create Repository');
     if (!init || !context.mounted) return;
     try {
@@ -33,7 +36,8 @@ Future<void> openRepositoryAt(BuildContext context, ReposState repos, String pat
       await repos.open(path);
     } on GitException catch (e2) {
       if (context.mounted) {
-        await showConfirmDialog(context, title: 'Cannot Create Repository', message: e2.message);
+        await showConfirmDialog(context,
+            title: 'Cannot Create Repository', message: e2.message);
       }
     }
   }
@@ -42,14 +46,16 @@ Future<void> openRepositoryAt(BuildContext context, ReposState repos, String pat
 /// Opens a folder chosen outside the app (command line, Explorer context
 /// menu). The repository may be the folder itself, a parent (found by git),
 /// or folders below it, in which case the user picks one or all of them.
-Future<void> openFolderFlow(BuildContext context, ReposState repos, String path) async {
+Future<void> openFolderFlow(
+    BuildContext context, ReposState repos, String path) async {
   try {
     await repos.open(path);
     return;
   } on GitException catch (e) {
     if (!e.message.contains('not a git repository')) {
       if (context.mounted) {
-        await showConfirmDialog(context, title: 'Cannot Open Repository', message: e.message);
+        await showConfirmDialog(context,
+            title: 'Cannot Open Repository', message: e.message);
       }
       return;
     }
@@ -71,7 +77,8 @@ Future<void> openFolderFlow(BuildContext context, ReposState repos, String path)
     message: '$path is not a Git repository, but these folders inside it are:',
     options: [
       for (final r in found) ChoiceOption(r, _relative(r, path), r),
-      ChoiceOption(all, 'All ${found.length} repositories', 'Adds each one to the sidebar.'),
+      ChoiceOption(all, 'All ${found.length} repositories',
+          'Adds each one to the sidebar.'),
     ],
     initial: found.first,
     okLabel: 'Open',
@@ -91,8 +98,16 @@ String _relative(String path, String base) {
 
 /// Working trees in folders below [dir], up to [depth] levels down. Folders
 /// that are repositories are not searched further.
-Future<List<String>> findRepositoriesBelow(String dir, {int depth = 2, int limit = 50}) async {
-  const skip = {'node_modules', 'build', 'dist', 'target', 'vendor', r'$RECYCLE.BIN'};
+Future<List<String>> findRepositoriesBelow(String dir,
+    {int depth = 2, int limit = 50}) async {
+  const skip = {
+    'node_modules',
+    'build',
+    'dist',
+    'target',
+    'vendor',
+    r'$RECYCLE.BIN'
+  };
   final found = <String>[];
   var level = [Directory(dir)];
   for (var d = 0; d < depth && level.isNotEmpty && found.length < limit; d++) {
@@ -103,7 +118,8 @@ Future<List<String>> findRepositoriesBelow(String dir, {int depth = 2, int limit
           if (e is! Directory) continue;
           final name = e.path.split(RegExp(r'[\\/]')).last;
           if (name.startsWith('.') || skip.contains(name)) continue;
-          if (await FileSystemEntity.type('${e.path}/.git') != FileSystemEntityType.notFound) {
+          if (await FileSystemEntity.type('${e.path}/.git') !=
+              FileSystemEntityType.notFound) {
             found.add(e.path);
             if (found.length >= limit) break;
           } else {
@@ -122,8 +138,10 @@ Future<List<String>> findRepositoriesBelow(String dir, {int depth = 2, int limit
 }
 
 Future<void> openRepositoryFlow(BuildContext context, ReposState repos) async {
-  final path = await FilePicker.getDirectoryPath(dialogTitle: 'Open Git Repository');
-  if (path != null && context.mounted) await openRepositoryAt(context, repos, path);
+  final path =
+      await FilePicker.getDirectoryPath(dialogTitle: 'Open Git Repository');
+  if (path != null && context.mounted)
+    await openRepositoryAt(context, repos, path);
 }
 
 Future<void> cloneRepositoryFlow(BuildContext context, ReposState repos,
@@ -131,52 +149,41 @@ Future<void> cloneRepositoryFlow(BuildContext context, ReposState repos,
   final request = await showCloneDialog(context, repos.accounts,
       initialUrl: initialUrl, initialAccountId: initialAccountId);
   if (request == null || !context.mounted) return;
-  final account = repos.accounts.accounts.where((a) => a.id == request.accountId).firstOrNull;
-  final navigator = Navigator.of(context);
-  showDialog<void>(
-    context: context,
-    barrierDismissible: false,
-    builder: (context) => _Progress('Cloning ${request.url}...'),
-  );
+  final account = repos.accounts.accounts
+      .where((a) => a.id == request.accountId)
+      .firstOrNull;
+  final task =
+      repos.tasks.start('Cloning ${request.folder}', subtitle: request.url);
+  final parser = GitProgressParser();
   GitException? error;
   try {
-    await GitRepository.clone(request.url, request.parent, request.folder,
-        credentials: account == null ? null : repos.accounts.credentialsPreferring(account));
+    await GitRepository.clone(
+      request.url,
+      request.parent,
+      request.folder,
+      credentials: account == null
+          ? null
+          : repos.accounts.credentialsPreferring(account),
+      onProgress: (chunk) {
+        for (final progress in parser.feed(chunk)) {
+          repos.tasks.update(task, progress);
+        }
+      },
+    );
+    repos.tasks.succeed(task);
   } on GitException catch (e) {
     error = e;
-  } finally {
-    navigator.pop();
+    repos.tasks.fail(task, e.message);
+  } catch (e) {
+    repos.tasks.fail(task, '$e');
+    rethrow;
   }
   if (!context.mounted) return;
   if (error != null) {
-    await showConfirmDialog(context, title: 'Clone Failed', message: error.message);
+    await showConfirmDialog(context,
+        title: 'Clone Failed', message: error.message);
     return;
   }
   await openRepositoryAt(context, repos, '${request.parent}/${request.folder}',
       accountId: account?.id);
-}
-
-class _Progress extends StatelessWidget {
-  const _Progress(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = IdeColors.of(context);
-    return Dialog(
-      backgroundColor: c.popupBg,
-      surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10), side: BorderSide(color: c.border)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-          const SizedBox(width: 14),
-          Flexible(child: Text(text, maxLines: 2, overflow: TextOverflow.ellipsis)),
-        ]),
-      ),
-    );
-  }
 }

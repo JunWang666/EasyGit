@@ -9,9 +9,14 @@ import '../git/git_repository.dart';
 import '../git/graph.dart';
 import '../git/lfs.dart';
 import '../git/models.dart';
+import '../git/progress.dart';
+import '../git/repo_file_entries.dart';
+import '../git/repo_files.dart';
 import '../hosting/hosting.dart';
 import '../net/network.dart';
 import 'accounts_store.dart';
+import 'lfs_credentials.dart';
+import 'task_center.dart';
 
 class DiffContent {
   const DiffContent(this.left, this.right, {this.lfs});
@@ -25,7 +30,8 @@ class DiffContent {
 
 /// One version of an LFS-managed file in a diff.
 class LfsSide {
-  const LfsSide({this.pointer, required this.size, this.localPath, this.download});
+  const LfsSide(
+      {this.pointer, required this.size, this.localPath, this.download});
 
   final LfsPointer? pointer;
   final int size;
@@ -69,7 +75,44 @@ class LfsState {
           if (!f.checkedOut) f
       ];
 
-  bool isTracked(String path) => trackedChanges.contains(path) || files.containsKey(path);
+  bool isTracked(String path) =>
+      trackedChanges.contains(path) || files.containsKey(path);
+}
+
+/// A repository file open in the Repo Files tab, with its unsaved edits.
+class RepoFileBuffer {
+  RepoFileBuffer(this.path, String content)
+      : original = content,
+        entries = parseFileEntries(path, content),
+        controller = TextEditingController(text: content);
+
+  /// Path relative to the repository root.
+  final String path;
+
+  /// The structured entries of a `.gitignore`, `.gitattributes`, `.lfsconfig`
+  /// or `.editorconfig`; null for a file that is edited as plain text.
+  FileEntries? entries;
+
+  /// The text of a plain-text file (README, or a file added by hand).
+  final TextEditingController controller;
+
+  /// The content last read from or written to the disk.
+  String original;
+
+  String get text => entries?.toText() ?? controller.text;
+  bool get dirty => text != original;
+
+  /// Replaces the content and takes it as the saved one.
+  void setContent(String value) {
+    original = value;
+    if (entries == null) {
+      controller.text = value;
+    } else {
+      entries = parseFileEntries(path, value);
+    }
+  }
+
+  void dispose() => controller.dispose();
 }
 
 /// The tabs of the main area for a repository.
@@ -78,7 +121,10 @@ enum RepoView {
   history('History'),
   branches('Branches'),
   stashes('Stashes'),
-  worktrees('Worktrees');
+  worktrees('Worktrees'),
+  lfs('Git LFS'),
+  files('Repo Files'),
+  settings('Settings');
 
   const RepoView(this.label);
 
@@ -131,27 +177,31 @@ class AppNotification {
 
 /// State of an open repository, shared by every panel of the workspace.
 class RepoController extends ChangeNotifier {
-  RepoController(this.repo, this.accounts) {
+  RepoController(this.repo, this.accounts, {this.tasks}) {
     repo.onLog = _addLog;
     accounts.addListener(_applyAccount);
     repo.accountId().then((id) {
       accountId = id;
       _applyAccount();
     });
+    _loadLfsCredential();
   }
 
   final GitRepository repo;
   final AccountsStore accounts;
+  final TaskCenter? tasks;
 
   /// The account this repository fetches and pushes with, or null to pick
   /// the account by server (see `GitRepository.accountId`).
   String? accountId;
 
-  HostingAccount? get account => accounts.accounts.where((a) => a.id == accountId).firstOrNull;
+  HostingAccount? get account =>
+      accounts.accounts.where((a) => a.id == accountId).firstOrNull;
 
   void _applyAccount() {
     final a = account;
-    repo.credentialOverride = a == null ? null : accounts.credentialsPreferring(a);
+    repo.credentialOverride =
+        a == null ? null : accounts.credentialsPreferring(a);
   }
 
   Future<void> setAccount(String? id) async {
@@ -192,11 +242,37 @@ class RepoController extends ChangeNotifier {
   List<WorktreeInfo> worktrees = const [];
   final LfsState lfs = LfsState();
 
+  /// Credentials for this repository's LFS server only, or null to use the
+  /// EasyGit accounts. Kept in the system credential store.
+  LfsCredential? lfsCredential;
+
+  // Repo Files tab: the files offered, which of them are on disk, the open
+  // file and one text buffer per file, so switching files keeps unsaved edits.
+  final Set<String> repoRootEntries = {};
+  final Set<String> existingRepoFiles = {};
+  final List<String> extraRepoFiles = [];
+  final Map<String, RepoFileBuffer> repoFileBuffers = {};
+  String? repoFileOpenPath;
+  bool repoFilesLoaded = false;
+  bool repoFileLoading = false;
+
+  /// The file open in the Repo Files editor, if any.
+  RepoFileBuffer? get repoFile =>
+      repoFileOpenPath == null ? null : repoFileBuffers[repoFileOpenPath];
+
+  /// Whether the tab holds unsaved edits for [path].
+  bool repoFileDirty(String path) => repoFileBuffers[path]?.dirty ?? false;
+
   RepoView view = RepoView.changes;
   DiffTab? changesDiff;
+  bool _changesDiffClosed = false;
   DiffTab? historyDiff;
 
   String? busy;
+  LfsTransferProgress? transferProgress;
+  String _transferOutput = '';
+  AppTask? _activeTask;
+  GitProgressParser _taskProgress = GitProgressParser();
   final List<GitCommandLog> consoleLog = [];
   final List<AppNotification> notifications = [];
   var _notificationId = 0;
@@ -208,8 +284,10 @@ class RepoController extends ChangeNotifier {
   List<int> get visible => _visible;
   bool get graphVisible => textFilter.trim().isEmpty && authorFilter == null;
 
-  List<GitRef> get localBranches => refs.where((r) => r.type == RefType.local).toList();
-  List<GitRef> get remoteBranches => refs.where((r) => r.type == RefType.remote).toList();
+  List<GitRef> get localBranches =>
+      refs.where((r) => r.type == RefType.local).toList();
+  List<GitRef> get remoteBranches =>
+      refs.where((r) => r.type == RefType.remote).toList();
   List<GitRef> get tags => refs.where((r) => r.type == RefType.tag).toList();
   String get currentBranchLabel => status?.headLabel ?? '';
 
@@ -227,6 +305,9 @@ class RepoController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     accounts.removeListener(_applyAccount);
+    for (final buffer in repoFileBuffers.values) {
+      buffer.dispose();
+    }
     messageController.dispose();
     messageFocus.dispose();
     super.dispose();
@@ -258,7 +339,8 @@ class RepoController extends ChangeNotifier {
   }
 
   /// Status and refs only, for repositories that are not on screen.
-  Future<void> refreshSummary() => Future.wait([refreshStatus(), _refreshRefs()]);
+  Future<void> refreshSummary() =>
+      Future.wait([refreshStatus(), _refreshRefs()]);
 
   Future<void> refreshStatus() async {
     try {
@@ -270,7 +352,9 @@ class RepoController extends ChangeNotifier {
           : const {};
       final diff = changesDiff;
       if (diff != null) {
-        final current = status!.changes.where((c) => c.path == diff.change.path).firstOrNull;
+        final current = status!.changes
+            .where((c) => c.path == diff.change.path)
+            .firstOrNull;
         if (current == null) {
           changesDiff = null;
         } else if (current.kind != diff.change.kind) {
@@ -280,7 +364,9 @@ class RepoController extends ChangeNotifier {
           diff.reload();
         }
       }
-      if (changesDiff == null && status!.changes.isNotEmpty) {
+      if (changesDiff == null &&
+          !_changesDiffClosed &&
+          status!.changes.isNotEmpty) {
         openWorkingDiff(trackedChanges.firstOrNull ?? status!.changes.first);
       }
       notifyListeners();
@@ -297,6 +383,7 @@ class RepoController extends ChangeNotifier {
       stashes = await repo.stashes();
       worktrees = await repo.worktrees();
       await _refreshLfs();
+      if (repoFilesLoaded) await _refreshRepoFiles();
       notifyListeners();
     } on GitException catch (e) {
       _notify('Cannot read branches', e.message, isError: true);
@@ -335,7 +422,9 @@ class RepoController extends ChangeNotifier {
     included.removeWhere((p) => !paths.contains(p));
     // Newly appearing tracked changes are included by default, like the IDE.
     for (final c in changes) {
-      if (!_knownChanges.contains(c.path) && !c.isUntracked) included.add(c.path);
+      if (!_knownChanges.contains(c.path) && !c.isUntracked) {
+        included.add(c.path);
+      }
     }
     _knownChanges = paths;
   }
@@ -385,7 +474,8 @@ class RepoController extends ChangeNotifier {
     for (final c in commits) {
       counts[c.author] = (counts[c.author] ?? 0) + 1;
     }
-    final list = counts.keys.toList()..sort((a, b) => counts[b]!.compareTo(counts[a]!));
+    final list = counts.keys.toList()
+      ..sort((a, b) => counts[b]!.compareTo(counts[a]!));
     return list;
   }
 
@@ -408,7 +498,9 @@ class RepoController extends ChangeNotifier {
         notifyListeners();
       }
     } on GitException catch (e) {
-      if (token == _detailsToken) _notify('Cannot load commit', e.message, isError: true);
+      if (token == _detailsToken) {
+        _notify('Cannot load commit', e.message, isError: true);
+      }
     }
   }
 
@@ -445,8 +537,8 @@ class RepoController extends ChangeNotifier {
     notifications.add(n);
     if (notifications.length > 4) notifications.removeAt(0);
     notifyListeners();
-    Timer(
-        Duration(seconds: isError ? (hint != null ? 20 : 12) : 5), () => dismissNotification(n.id));
+    Timer(Duration(seconds: isError ? (hint != null ? 20 : 12) : 5),
+        () => dismissNotification(n.id));
   }
 
   void dismissNotification(int id) {
@@ -455,24 +547,68 @@ class RepoController extends ChangeNotifier {
   }
 
   /// Runs a user-visible git operation, reporting failure as a notification.
-  Future<bool> run(String title, Future<void> Function() action, {String? success}) async {
+  Future<bool> run(String title, Future<void> Function() action,
+      {String? success}) async {
     if (busy != null) {
       _notify(title, 'Another operation is in progress: $busy', isError: true);
       return false;
     }
+    final task = tasks?.start(title, subtitle: name);
+    _activeTask = task;
+    _taskProgress = GitProgressParser();
     busy = title;
+    transferProgress = null;
+    _transferOutput = '';
     notifyListeners();
     try {
       await action();
+      if (task != null) tasks!.succeed(task);
       if (success != null) _notify(success, '');
       return true;
     } on GitException catch (e) {
+      if (task != null) tasks!.fail(task, e.message);
       _notify('$title failed', e.message, isError: true);
       return false;
+    } catch (e) {
+      if (task != null) tasks!.fail(task, '$e');
+      rethrow;
     } finally {
+      _activeTask = null;
       busy = null;
+      transferProgress = null;
+      _transferOutput = '';
       notifyListeners();
       await refreshAll();
+    }
+  }
+
+  void _onTransferOutput(String chunk) {
+    final task = _activeTask;
+    if (task != null) {
+      for (final progress in _taskProgress.feed(chunk)) {
+        tasks!.update(task, progress);
+      }
+    }
+    _transferOutput += chunk;
+    final lines = _transferOutput.split(RegExp(r'[\r\n]'));
+    _transferOutput = lines.removeLast();
+    for (final line in [...lines, _transferOutput]) {
+      final progress = LfsTransferProgress.parse(line);
+      if (progress == null) continue;
+      final current = transferProgress;
+      if (current != null &&
+          current.percent == progress.percent &&
+          current.completedFiles == progress.completedFiles &&
+          current.totalFiles == progress.totalFiles &&
+          current.uploading == progress.uploading) {
+        continue;
+      }
+      transferProgress = progress;
+      notifyListeners();
+    }
+    if (_transferOutput.length > 2048) {
+      _transferOutput =
+          _transferOutput.substring(_transferOutput.length - 2048);
     }
   }
 
@@ -502,9 +638,14 @@ class RepoController extends ChangeNotifier {
     }
   }
 
-  Future<void> commit({bool andPush = false}) async {
+  Future<void> commit(
+      {bool andPush = false,
+      String? authorName,
+      String? authorEmail,
+      HostingAccount? pushAccount}) async {
     final message = messageController.text.trim();
-    final files = status?.changes.where((c) => included.contains(c.path)).toList() ?? [];
+    final files =
+        status?.changes.where((c) => included.contains(c.path)).toList() ?? [];
     if (message.isEmpty) {
       _notify('Commit', 'Please enter a commit message.', isError: true);
       messageFocus.requestFocus();
@@ -517,10 +658,11 @@ class RepoController extends ChangeNotifier {
     final firstLine = message.split('\n').first;
     final ok = await run(
       andPush ? 'Committing and pushing' : 'Committing',
-      () async {
-        await repo.commit(message, files, amend: amend);
-        if (andPush) await repo.push();
-      },
+      () => _withAccount(andPush ? pushAccount : null, () async {
+        await repo.commit(message, files,
+            amend: amend, authorName: authorName, authorEmail: authorEmail);
+        if (andPush) await repo.push(onProgress: _onTransferOutput);
+      }),
       success: andPush
           ? 'Committed and pushed: $firstLine'
           : '${files.length} file${files.length == 1 ? '' : 's'} committed: $firstLine',
@@ -532,11 +674,26 @@ class RepoController extends ChangeNotifier {
     }
   }
 
-  Future<void> rollback(List<FileChange> files) => run('Rollback', () => repo.rollback(files),
-      success: '${files.length} file${files.length == 1 ? '' : 's'} rolled back');
+  Future<T> _withAccount<T>(
+      HostingAccount? account, Future<T> Function() action) async {
+    if (account == null) return action();
+    repo.credentialOverride =
+        accounts.credentialsPreferring(account) ?? const [];
+    try {
+      return await action();
+    } finally {
+      _applyAccount();
+    }
+  }
+
+  Future<void> rollback(List<FileChange> files) => run(
+      'Rollback', () => repo.rollback(files),
+      success:
+          '${files.length} file${files.length == 1 ? '' : 's'} rolled back');
 
   Future<void> addToVcs(List<FileChange> files) async {
-    final ok = await run('Add to VCS', () => repo.addToVcs([for (final f in files) f.path]));
+    final ok = await run(
+        'Add to VCS', () => repo.addToVcs([for (final f in files) f.path]));
     if (ok) {
       included.addAll(files.map((f) => f.path));
       notifyListeners();
@@ -546,30 +703,42 @@ class RepoController extends ChangeNotifier {
   Future<void> stash(String message) =>
       run('Stash', () => repo.stash(message), success: 'Changes stashed');
 
-  Future<void> stashPop() => run('Unstash', () => repo.stashPop(), success: 'Stash applied');
+  Future<void> stashPop() =>
+      run('Unstash', () => repo.stashPop(), success: 'Stash applied');
 
   // ---------------------------------------------------------------- remote
 
-  Future<void> fetch() => run('Fetching', repo.fetch, success: 'Fetch finished');
+  Future<void> fetch() =>
+      run('Fetching', () => repo.fetch(onProgress: _onTransferOutput),
+          success: 'Fetch finished');
 
-  Future<void> pull({bool rebase = false}) =>
-      run('Updating project', () => repo.pull(rebase: rebase), success: 'Project updated');
+  Future<void> pull({bool rebase = false}) => run('Updating project',
+      () => repo.pull(rebase: rebase, onProgress: _onTransferOutput),
+      success: 'Project updated');
 
-  Future<void> push({bool force = false}) =>
-      run('Pushing', () => repo.push(force: force), success: 'Pushed $currentBranchLabel');
+  Future<void> push({bool force = false, HostingAccount? account}) => run(
+      'Pushing',
+      () => _withAccount(account,
+          () => repo.push(force: force, onProgress: _onTransferOutput)),
+      success: 'Pushed $currentBranchLabel');
 
-  Future<void> pushBranch(GitRef ref) =>
-      run('Pushing ${ref.name}', () => repo.pushBranch(ref), success: 'Pushed ${ref.name}');
+  Future<void> pushBranch(GitRef ref, {HostingAccount? account}) => run(
+      'Pushing ${ref.name}',
+      () => _withAccount(
+          account, () => repo.pushBranch(ref, onProgress: _onTransferOutput)),
+      success: 'Pushed ${ref.name}');
 
   // ---------------------------------------------------------------- branches
 
   Future<void> checkout(GitRef ref) {
     if (ref.type == RefType.remote) {
-      return run('Checking out ${ref.name}', () => repo.checkoutRemote(ref, refs),
+      return run(
+          'Checking out ${ref.name}', () => repo.checkoutRemote(ref, refs),
           success: 'Checked out ${ref.branchName}');
     }
     if (ref.type == RefType.tag) {
-      return run('Checking out ${ref.name}', () => repo.checkoutRevision(ref.name),
+      return run(
+          'Checking out ${ref.name}', () => repo.checkoutRevision(ref.name),
           success: 'Checked out tag ${ref.name}');
     }
     return run('Checking out ${ref.name}', () => repo.checkout(ref.name),
@@ -577,10 +746,13 @@ class RepoController extends ChangeNotifier {
   }
 
   Future<void> checkoutRevision(String rev) =>
-      run('Checking out $rev', () => repo.checkoutRevision(rev), success: 'Checked out $rev');
+      run('Checking out $rev', () => repo.checkoutRevision(rev),
+          success: 'Checked out $rev');
 
-  Future<void> createBranch(String name, String startPoint, {required bool checkout}) =>
-      run('Creating branch $name', () => repo.createBranch(name, startPoint, checkout: checkout),
+  Future<void> createBranch(String name, String startPoint,
+          {required bool checkout}) =>
+      run('Creating branch $name',
+          () => repo.createBranch(name, startPoint, checkout: checkout),
           success: 'Branch $name created');
 
   Future<void> renameBranch(GitRef ref, String newName) =>
@@ -591,11 +763,12 @@ class RepoController extends ChangeNotifier {
       run('Deleting ${ref.name}', () => repo.deleteBranch(ref, force: force),
           success: 'Deleted ${ref.name}');
 
-  Future<void> merge(String ref) =>
-      run('Merging $ref', () => repo.merge(ref), success: 'Merged $ref into $currentBranchLabel');
+  Future<void> merge(String ref) => run('Merging $ref', () => repo.merge(ref),
+      success: 'Merged $ref into $currentBranchLabel');
 
-  Future<void> rebase(String onto) => run('Rebasing onto $onto', () => repo.rebase(onto),
-      success: 'Rebased $currentBranchLabel onto $onto');
+  Future<void> rebase(String onto) =>
+      run('Rebasing onto $onto', () => repo.rebase(onto),
+          success: 'Rebased $currentBranchLabel onto $onto');
 
   Future<void> abortOperation() {
     final state = status?.state ?? RepoState.normal;
@@ -604,22 +777,26 @@ class RepoController extends ChangeNotifier {
 
   Future<void> continueOperation() {
     final state = status?.state ?? RepoState.normal;
-    return run('Continue', () => repo.continueOperation(state), success: 'Continued');
+    return run('Continue', () => repo.continueOperation(state),
+        success: 'Continued');
   }
 
   // ---------------------------------------------------------------- commits
 
   Future<void> cherryPick(CommitInfo c) =>
-      run('Cherry-pick', () => repo.cherryPick(c.hash), success: 'Cherry-picked ${c.shortHash}');
+      run('Cherry-pick', () => repo.cherryPick(c.hash),
+          success: 'Cherry-picked ${c.shortHash}');
 
-  Future<void> revert(CommitInfo c) =>
-      run('Revert', () => repo.revert(c.hash), success: 'Reverted ${c.shortHash}');
+  Future<void> revert(CommitInfo c) => run('Revert', () => repo.revert(c.hash),
+      success: 'Reverted ${c.shortHash}');
 
-  Future<void> reset(CommitInfo c, ResetMode mode) => run('Reset', () => repo.reset(c.hash, mode),
-      success: '$currentBranchLabel reset to ${c.shortHash}');
+  Future<void> reset(CommitInfo c, ResetMode mode) =>
+      run('Reset', () => repo.reset(c.hash, mode),
+          success: '$currentBranchLabel reset to ${c.shortHash}');
 
   Future<void> createTag(String name, CommitInfo c) =>
-      run('Creating tag', () => repo.createTag(name, c.hash), success: 'Tag $name created');
+      run('Creating tag', () => repo.createTag(name, c.hash),
+          success: 'Tag $name created');
 
   // ---------------------------------------------------------------- hosting
 
@@ -642,11 +819,13 @@ class RepoController extends ChangeNotifier {
   }
 
   /// Shows an error notification for work done outside this controller.
-  void reportError(String title, String message) => _notify(title, message, isError: true);
+  void reportError(String title, String message) =>
+      _notify(title, message, isError: true);
 
   Future<void> openUrl(String url) async {
     try {
-      if (!await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication)) {
+      if (!await launchUrl(Uri.parse(url),
+          mode: LaunchMode.externalApplication)) {
         _notify('Cannot open browser', url, isError: true);
       }
     } catch (e) {
@@ -656,12 +835,16 @@ class RepoController extends ChangeNotifier {
 
   /// Pushes [branch] if it has no upstream yet, then opens the hosting
   /// service's "new pull/merge request" page for it.
-  Future<void> createRequest(GitRef branch) async {
+  Future<void> createRequest(GitRef branch, {HostingAccount? account}) async {
     var ref = branch;
     if (ref.upstream == null) {
-      final ok = await run('Pushing ${ref.name}', () => repo.pushBranch(ref));
+      final ok = await run(
+          'Pushing ${ref.name}',
+          () => _withAccount(account,
+              () => repo.pushBranch(ref, onProgress: _onTransferOutput)));
       if (!ok) return;
-      ref = refs.firstWhere((r) => r.fullName == branch.fullName, orElse: () => branch);
+      ref = refs.firstWhere((r) => r.fullName == branch.fullName,
+          orElse: () => branch);
     }
     final upstream = ref.upstream;
     final remote = upstream != null && upstream.contains('/')
@@ -678,11 +861,13 @@ class RepoController extends ChangeNotifier {
         ? upstream.substring(upstream.indexOf('/') + 1)
         : ref.name;
     final base = await repo.remoteDefaultBranch(remote);
-    await openUrl(web.newRequest(remoteBranch, base: base == remoteBranch ? null : base));
+    await openUrl(
+        web.newRequest(remoteBranch, base: base == remoteBranch ? null : base));
   }
 
   Future<void> addRemote(String name, String url) =>
-      run('Adding remote $name', () => repo.addRemote(name, url), success: 'Remote $name added');
+      run('Adding remote $name', () => repo.addRemote(name, url),
+          success: 'Remote $name added');
 
   Future<void> editRemote(String oldName, String name, String url) => run(
         'Updating remote $oldName',
@@ -694,16 +879,19 @@ class RepoController extends ChangeNotifier {
       );
 
   Future<void> removeRemote(String name) =>
-      run('Removing remote $name', () => repo.removeRemote(name), success: 'Remote $name removed');
+      run('Removing remote $name', () => repo.removeRemote(name),
+          success: 'Remote $name removed');
 
   // ---------------------------------------------------------------- stashes & worktrees
 
   Future<void> applyStash(StashEntry s, {bool pop = false}) => run(
-      pop ? 'Unstash' : 'Apply stash', () => pop ? repo.stashPop(s.ref) : repo.stashApply(s.ref),
+      pop ? 'Unstash' : 'Apply stash',
+      () => pop ? repo.stashPop(s.ref) : repo.stashApply(s.ref),
       success: pop ? 'Popped ${s.ref}' : 'Applied ${s.ref}');
 
   Future<void> dropStash(StashEntry s) =>
-      run('Drop stash', () => repo.stashDrop(s.ref), success: 'Dropped ${s.ref}');
+      run('Drop stash', () => repo.stashDrop(s.ref),
+          success: 'Dropped ${s.ref}');
 
   /// Selects a stash so its files and diff show in the Stashes view.
   void showStash(StashEntry s) {
@@ -711,18 +899,58 @@ class RepoController extends ChangeNotifier {
     selectCommit(s.hash);
   }
 
-  Future<bool> addWorktree(String path, String commitish, {String? newBranch}) =>
-      run('Adding worktree', () => repo.addWorktree(path, commitish, newBranch: newBranch),
+  Future<bool> addWorktree(String path, String commitish,
+          {String? newBranch}) =>
+      run('Adding worktree',
+          () => repo.addWorktree(path, commitish, newBranch: newBranch),
           success: 'Worktree created at $path');
 
   Future<void> removeWorktree(WorktreeInfo w, {bool force = false}) =>
       run('Removing worktree', () => repo.removeWorktree(w.path, force: force),
           success: 'Worktree ${w.name} removed');
 
-  Future<void> pruneWorktrees() =>
-      run('Pruning worktrees', repo.pruneWorktrees, success: 'Stale worktrees pruned');
+  Future<void> pruneWorktrees() => run('Pruning worktrees', repo.pruneWorktrees,
+      success: 'Stale worktrees pruned');
 
   // ---------------------------------------------------------------- Git LFS
+
+  static const _lfsCredentialStore = LfsCredentialStore();
+
+  Future<void> _loadLfsCredential() async {
+    final credential = await _lfsCredentialStore.read(repo.root);
+    if (_disposed) return;
+    lfsCredential = credential;
+    repo.lfsCredentials = credential == null ? const [] : [credential.git];
+    notifyListeners();
+  }
+
+  /// Saves credentials that git-lfs uses for [server] in place of the accounts.
+  /// They are kept in the system credential store, never in the repository.
+  Future<bool> setLfsCredentials(
+      {required String server,
+      required String username,
+      required String token}) async {
+    final credential = LfsCredential(
+        server: server, username: username.trim(), token: token.trim());
+    if (!await _lfsCredentialStore.write(repo.root, credential)) {
+      _notify('Cannot save LFS credentials',
+          'The system credential store did not accept the entry.',
+          isError: true);
+      return false;
+    }
+    lfsCredential = credential;
+    repo.lfsCredentials = [credential.git];
+    notifyListeners();
+    return true;
+  }
+
+  /// Forgets the LFS credentials; git-lfs falls back to the EasyGit accounts.
+  Future<void> clearLfsCredentials() async {
+    await _lfsCredentialStore.delete(repo.root);
+    lfsCredential = null;
+    repo.lfsCredentials = const [];
+    notifyListeners();
+  }
 
   Future<void> _refreshLfs() async {
     lfs.version = await GitRepository.lfsVersion();
@@ -742,27 +970,69 @@ class RepoController extends ChangeNotifier {
       ..patterns = await repo.lfsPatterns();
   }
 
-  Future<void> lfsInstallHooks() => run('Setting up Git LFS', repo.lfsInstallHooks,
-      success: 'Git LFS is set up for this repository');
+  Future<void> lfsInstallHooks() =>
+      run('Setting up Git LFS', repo.lfsInstallHooks,
+          success: 'Git LFS is set up for this repository');
 
   /// Downloads LFS content into the working tree ([paths] or everything).
   Future<void> lfsDownload([List<String>? paths]) =>
-      run('Downloading LFS files', () => repo.lfsPull(paths),
+      run('Downloading LFS files', () => repo.lfsPull(paths, _onTransferOutput),
           success: paths == null || paths.length != 1
               ? 'LFS files downloaded'
               : 'Downloaded ${paths.first}');
+
+  /// Uploads selected local objects without pushing the current Git branch.
+  Future<void> lfsUpload(List<LfsFile> files) async {
+    final oids = files
+        .where((f) => f.downloaded && f.oid.isNotEmpty)
+        .map((f) => f.oid)
+        .toSet()
+        .toList();
+    if (oids.isEmpty) return;
+    final remote = primaryRemote;
+    if (remote == null) {
+      _notify('Cannot upload LFS files', 'No remote is configured.',
+          isError: true);
+      return;
+    }
+    await run(
+      'Uploading LFS files',
+      () => repo.lfsPush(remote, oids, onProgress: _onTransferOutput),
+      success:
+          'Uploaded ${oids.length} LFS file${oids.length == 1 ? '' : 's'} to $remote',
+    );
+  }
+
+  Future<bool> lfsClearLocal(List<LfsFile> files) async {
+    var result = const LfsCleanResult(cleaned: 0, skipped: 0);
+    final ok = await run('Clearing local LFS data', () async {
+      final changed =
+          status?.changes.map((c) => c.path).toSet() ?? const <String>{};
+      result = await repo.lfsClean(files, changedPaths: changed);
+    });
+    if (ok) {
+      _notify(
+        'Local LFS data cleared for ${result.cleaned} file${result.cleaned == 1 ? '' : 's'}',
+        result.skipped == 0
+            ? ''
+            : '${result.skipped} modified file${result.skipped == 1 ? ' was' : 's were'} left unchanged.',
+      );
+    }
+    return ok;
+  }
 
   Future<bool> lfsTrack(List<String> patterns) =>
       run('Tracking with LFS', () => repo.lfsTrack(patterns),
           success: 'LFS now manages ${patterns.join(', ')}');
 
-  Future<void> setLfsServer(LfsUrlSource source, String url) =>
-      run('Changing LFS server', () => repo.setLfsServer(source, url),
-          success: source == LfsUrlSource.shared
-              ? 'LFS server saved in .lfsconfig. Commit it to share with the team.'
-              : 'LFS server updated');
+  Future<void> setLfsServer(LfsUrlSource source, String url) => run(
+      'Changing LFS server', () => repo.setLfsServer(source, url),
+      success: source == LfsUrlSource.shared
+          ? 'LFS server saved in .lfsconfig. Commit it to share with the team.'
+          : 'LFS server updated');
 
-  LfsSide? _lfsSideFromPointer(String? text, {Future<void> Function()? download}) {
+  LfsSide? _lfsSideFromPointer(String? text,
+      {Future<void> Function()? download}) {
     final pointer = LfsPointer.parse(text);
     if (pointer == null) return null;
     final path = lfs.env.objectPath(pointer.oid);
@@ -781,11 +1051,186 @@ class RepoController extends ChangeNotifier {
     final length = await file.length();
     // A pointer in the working tree means the content was never downloaded.
     if (length < 1024) {
-      final side = _lfsSideFromPointer(await file.readAsString().catchError((_) => ''),
+      final side = _lfsSideFromPointer(
+          await file.readAsString().catchError((_) => ''),
           download: () => lfsDownload([relPath]));
       if (side != null) return side;
     }
     return LfsSide(size: length, localPath: file.path);
+  }
+
+  // ---------------------------------------------------------------- repo files
+
+  /// Paths the Repo Files tab lists: the built-in files, then added ones.
+  List<String> get repoFilePaths => [
+        for (final spec in repoFileSpecs) spec.path,
+        ...extraRepoFiles,
+      ];
+
+  /// Whether [path] is in the working tree (as of the last refresh).
+  bool repoFileExists(String path) => existingRepoFiles.contains(path);
+
+  /// How many managed files have uncommitted changes.
+  int get changedRepoFileCount {
+    final changes = status?.changes;
+    if (changes == null) return 0;
+    final paths = {...repoFilePaths};
+    return changes.where((c) => paths.contains(c.path)).length;
+  }
+
+  /// Values for the `{{name}}` placeholders of the file templates.
+  Map<String, String> templateValues() => {
+        'project': name,
+        'lfsUrl': lfs.endpoint ?? 'https://lfs.example.com/team/$name',
+      };
+
+  /// Reads the managed files from the working tree; the tab calls this once.
+  Future<void> loadRepoFiles() async {
+    try {
+      await _refreshRepoFiles();
+    } on FileSystemException {
+      // The tab then shows every file as not created yet.
+    } finally {
+      repoFilesLoaded = true;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _refreshRepoFiles() async {
+    final entries = <String>{};
+    try {
+      for (final entry in Directory(repo.root).listSync()) {
+        entries.add(entry.uri.pathSegments.last);
+      }
+    } on FileSystemException {
+      // An unreadable root only costs the template suggestions.
+    }
+    repoRootEntries
+      ..clear()
+      ..addAll(entries);
+
+    final existing = <String>{};
+    for (final path in repoFilePaths) {
+      try {
+        if (await repo.workingFileSize(path) != null) existing.add(path);
+      } on FileSystemException {
+        // A file that cannot be read is treated as missing.
+      }
+    }
+    existingRepoFiles
+      ..clear()
+      ..addAll(existing);
+
+    // A clean buffer follows changes made outside the tab (git lfs track edits
+    // .gitattributes, for example); a dirty one keeps the user's text.
+    for (final buffer in repoFileBuffers.values) {
+      if (buffer.dirty || !existing.contains(buffer.path)) continue;
+      final text = await repo.readWorkingFile(buffer.path);
+      if (text != null && text != buffer.original) buffer.setContent(text);
+    }
+  }
+
+  /// Opens [path] in the editor, keeping the text of files already opened.
+  Future<void> openRepoFile(String path) async {
+    if (repoFileOpenPath == path) return;
+    repoFileOpenPath = path;
+    final opened = repoFileBuffers[path];
+    if (opened != null) {
+      repoFileLoading = false;
+      notifyListeners();
+      return;
+    }
+    final buffer = RepoFileBuffer(path, '');
+    repoFileBuffers[path] = buffer;
+    repoFileLoading = true;
+    notifyListeners();
+    final content = await repo.readWorkingFile(path) ?? '';
+    buffer.setContent(content);
+    if (repoFileOpenPath == path) repoFileLoading = false;
+    notifyListeners();
+  }
+
+  /// Re-reads the open file from disk, dropping unsaved edits.
+  Future<void> reloadRepoFile() async {
+    final buffer = repoFile;
+    if (buffer == null) return;
+    final content = await repo.readWorkingFile(buffer.path) ?? '';
+    buffer.setContent(content);
+    notifyListeners();
+  }
+
+  /// Applies [change] to the open file's entries and repaints the tab.
+  ///
+  /// Entries are edited in place; saving is still a separate step, so a
+  /// half-finished list of patterns never reaches the disk on its own.
+  void updateRepoFile(VoidCallback change) {
+    final buffer = repoFile;
+    if (buffer == null || buffer.entries == null) return;
+    change();
+    notifyListeners();
+  }
+
+  /// Writes the open file, creating it when it does not exist yet.
+  Future<bool> saveRepoFile() async {
+    final buffer = repoFile;
+    if (buffer == null) return false;
+    final text = buffer.text;
+    final created = !repoFileExists(buffer.path);
+    final ok = await run(
+      created ? 'Creating ${buffer.path}' : 'Saving ${buffer.path}',
+      () => repo.writeWorkingFile(buffer.path, text),
+      success: '${created ? 'Created' : 'Saved'} ${buffer.path}',
+    );
+    if (ok) {
+      buffer.original = text;
+      notifyListeners();
+    }
+    return ok;
+  }
+
+  /// Writes [template] into the open file: the whole content, or appended to it.
+  Future<bool> applyRepoFileTemplate(FileTemplate template,
+      {required bool append}) async {
+    final buffer = repoFile;
+    if (buffer == null) return false;
+    final rendered = template.render(templateValues());
+    final next = append ? appendTemplate(buffer.text, rendered) : rendered;
+    final created = !repoFileExists(buffer.path);
+    final ok = await run(
+      created ? 'Creating ${buffer.path}' : 'Updating ${buffer.path}',
+      () => repo.writeWorkingFile(buffer.path, next),
+      success: '${created ? 'Created' : 'Updated'} ${buffer.path}',
+    );
+    if (ok) {
+      buffer.setContent(next);
+      notifyListeners();
+    }
+    return ok;
+  }
+
+  Future<void> deleteRepoFile(String path) async {
+    final ok = await run('Deleting $path', () => repo.deleteWorkingFile(path),
+        success: 'Deleted $path');
+    if (!ok) return;
+    repoFileBuffers[path]?.setContent('');
+    notifyListeners();
+  }
+
+  /// Lists a file of your own in the tab and opens it.
+  Future<void> addRepoFile(String path) async {
+    if (!repoFilePaths.contains(path)) {
+      extraRepoFiles.add(path);
+      notifyListeners();
+    }
+    await openRepoFile(path);
+  }
+
+  /// Takes a file of your own out of the tab; the file itself is kept.
+  void forgetRepoFile(String path) {
+    extraRepoFiles.remove(path);
+    repoFileBuffers.remove(path)?.dispose();
+    if (repoFileOpenPath == path) repoFileOpenPath = null;
+    notifyListeners();
   }
 
   // ---------------------------------------------------------------- views & diffs
@@ -799,6 +1244,7 @@ class RepoController extends ChangeNotifier {
   /// Shows the working-tree diff of [change] in the Local Changes view.
   void openWorkingDiff(FileChange change) {
     if (changesDiff?.id == 'wt:${change.path}') return;
+    _changesDiffClosed = false;
     changesDiff = DiffTab(
       id: 'wt:${change.path}',
       change: change,
@@ -808,7 +1254,9 @@ class RepoController extends ChangeNotifier {
         final noBase = change.kind == ChangeKind.added ||
             change.kind == ChangeKind.untracked ||
             !(status?.hasCommits ?? false);
-        final left = noBase ? null : await repo.fileAt('HEAD', change.oldPath ?? change.path);
+        final left = noBase
+            ? null
+            : await repo.fileAt('HEAD', change.oldPath ?? change.path);
         final deleted = change.kind == ChangeKind.deleted;
         // LFS files: compare sizes and previews instead of pointer text.
         if (lfs.isTracked(change.path) || LfsPointer.parse(left) != null) {
@@ -816,8 +1264,8 @@ class RepoController extends ChangeNotifier {
           return DiffContent(null, null,
               lfs: LfsDiff(
                 _lfsSideFromPointer(left,
-                    download: () =>
-                        _lfsFetchVersion(remote, 'HEAD', change.oldPath ?? change.path)),
+                    download: () => _lfsFetchVersion(
+                        remote, 'HEAD', change.oldPath ?? change.path)),
                 deleted ? null : await _lfsSideFromWorkingFile(change.path),
               ));
         }
@@ -828,8 +1276,16 @@ class RepoController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void closeWorkingDiff() {
+    if (changesDiff == null) return;
+    _changesDiffClosed = true;
+    changesDiff = null;
+    notifyListeners();
+  }
+
   Future<void> _lfsFetchVersion(String remote, String rev, String path) async {
-    await run('Downloading LFS object', () => repo.lfsFetch(remote, rev, path));
+    await run('Downloading LFS object',
+        () => repo.lfsFetch(remote, rev, path, onProgress: _onTransferOutput));
     changesDiff?.reload();
     historyDiff?.reload();
     notifyListeners();
@@ -848,17 +1304,19 @@ class RepoController extends ChangeNotifier {
         final left = parent == null || change.kind == ChangeKind.added
             ? null
             : await repo.fileAt(parent, change.oldPath ?? change.path);
-        final right =
-            change.kind == ChangeKind.deleted ? null : await repo.fileAt(commit.hash, change.path);
+        final right = change.kind == ChangeKind.deleted
+            ? null
+            : await repo.fileAt(commit.hash, change.path);
         if (LfsPointer.parse(left) != null || LfsPointer.parse(right) != null) {
           final remote = primaryRemote ?? 'origin';
           return DiffContent(null, null,
               lfs: LfsDiff(
                 _lfsSideFromPointer(left,
-                    download: () =>
-                        _lfsFetchVersion(remote, parent!, change.oldPath ?? change.path)),
+                    download: () => _lfsFetchVersion(
+                        remote, parent!, change.oldPath ?? change.path)),
                 _lfsSideFromPointer(right,
-                    download: () => _lfsFetchVersion(remote, commit.hash, change.path)),
+                    download: () =>
+                        _lfsFetchVersion(remote, commit.hash, change.path)),
               ));
         }
         return DiffContent(left, right);

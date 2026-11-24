@@ -8,6 +8,7 @@ import '../net/network.dart';
 import 'accounts_store.dart';
 import 'app_settings.dart';
 import 'repo_controller.dart';
+import 'task_center.dart';
 
 /// The repositories shown in the sidebar and which one is selected.
 class ReposState extends ChangeNotifier {
@@ -17,7 +18,8 @@ class ReposState extends ChangeNotifier {
     accounts.addListener(_syncSelfHosted);
     // Leave an account page whose account was removed.
     accounts.addListener(() {
-      if (account != null && !accounts.accounts.any((a) => a.id == account!.id)) {
+      if (account != null &&
+          !accounts.accounts.any((a) => a.id == account!.id)) {
         account = null;
         notifyListeners();
       }
@@ -28,11 +30,17 @@ class ReposState extends ChangeNotifier {
   final AccountsStore accounts;
 
   final NetworkSettings network;
+  final TaskCenter tasks = TaskCenter();
 
   final List<RepoController> repos = [];
   RepoController? current;
 
-  static const _publicHosts = {'github.com', 'gitlab.com', 'codeberg.org', 'gitea.com'};
+  static const _publicHosts = {
+    'github.com',
+    'gitlab.com',
+    'codeberg.org',
+    'gitea.com'
+  };
 
   /// Self-hosted servers can bypass the proxy (see NetworkSettings).
   void _syncSelfHosted() => network.setSelfHostedHosts([
@@ -57,13 +65,16 @@ class ReposState extends ChangeNotifier {
   Future<void> restore() async {
     for (final path in settings.recent) {
       try {
-        final ctrl = RepoController(await GitRepository.open(path), accounts);
+        final ctrl = RepoController(await GitRepository.open(path), accounts,
+            tasks: tasks);
         repos.add(ctrl);
       } catch (_) {
         missing.add(path);
       }
     }
-    current = repos.where((r) => r.repo.root == settings.selectedRepository).firstOrNull ??
+    current = repos
+            .where((r) => r.repo.root == settings.selectedRepository)
+            .firstOrNull ??
         repos.firstOrNull;
     notifyListeners();
     await current?.refreshAll();
@@ -77,12 +88,13 @@ class ReposState extends ChangeNotifier {
   /// none), adds it to the sidebar if needed and selects it.
   Future<RepoController> open(String path) async {
     final repo = await GitRepository.open(path);
-    final existing = repos.where((r) => _samePath(r.repo.root, repo.root)).firstOrNull;
+    final existing =
+        repos.where((r) => _samePath(r.repo.root, repo.root)).firstOrNull;
     if (existing != null) {
       select(existing);
       return existing;
     }
-    final ctrl = RepoController(repo, accounts);
+    final ctrl = RepoController(repo, accounts, tasks: tasks);
     repos.add(ctrl);
     missing.remove(path);
     await settings.addRecent(repo.root);

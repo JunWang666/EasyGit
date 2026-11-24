@@ -6,6 +6,7 @@ import '../../git/lfs.dart';
 import '../../git/models.dart';
 import '../../state/repo_controller.dart';
 import '../../theme/ide_theme.dart';
+import '../repo/operation_identity_flow.dart';
 import '../widgets/common.dart';
 import '../widgets/dialogs.dart';
 
@@ -14,12 +15,16 @@ const largeFileBytes = 50 * 1024 * 1024;
 
 enum _LargeFileChoice { track, commitAnyway }
 
-/// Commits the selected files, first offering Git LFS for large ones.
-Future<void> commitFlow(BuildContext context, RepoController ctrl, {bool andPush = false}) async {
-  final selected =
-      ctrl.status?.changes.where((c) => ctrl.included.contains(c.path)).toList() ?? const [];
+/// Commits the selected files after confirming the identity and any push account.
+Future<void> commitFlow(BuildContext context, RepoController ctrl,
+    {bool andPush = false}) async {
+  final selected = ctrl.status?.changes
+          .where((c) => ctrl.included.contains(c.path))
+          .toList() ??
+      const [];
   // Let commit() report a missing message or empty selection first.
-  if (ctrl.messageController.text.trim().isEmpty || selected.isEmpty) {
+  if (ctrl.messageController.text.trim().isEmpty ||
+      (selected.isEmpty && !ctrl.amend)) {
     await ctrl.commit(andPush: andPush);
     return;
   }
@@ -31,46 +36,57 @@ Future<void> commitFlow(BuildContext context, RepoController ctrl, {bool andPush
     final size = await file.length();
     if (size >= largeFileBytes) large.add((f, size));
   }
-  if (large.isEmpty) {
-    await ctrl.commit(andPush: andPush);
-    return;
+  var trackLargeFiles = false;
+  var patterns = const <String>[];
+  if (large.isNotEmpty) {
+    if (!context.mounted) return;
+    patterns = {for (final (f, _) in large) _patternFor(f.path)}.toList();
+    final choice = await showDialog<_LargeFileChoice>(
+      context: context,
+      builder: (context) => _LargeFilesDialog(
+        files: large,
+        patterns: patterns,
+        lfsInstalled: ctrl.lfs.installed,
+      ),
+    );
+    if (choice == null) return;
+    trackLargeFiles = choice == _LargeFileChoice.track;
   }
   if (!context.mounted) return;
-
-  final patterns = {for (final (f, _) in large) _patternFor(f.path)}.toList();
-  final choice = await showDialog<_LargeFileChoice>(
-    context: context,
-    builder: (context) => _LargeFilesDialog(
-      files: large,
-      patterns: patterns,
-      lfsInstalled: ctrl.lfs.installed,
-    ),
-  );
-  switch (choice) {
-    case null:
-      return;
-    case _LargeFileChoice.commitAnyway:
-      await ctrl.commit(andPush: andPush);
-    case _LargeFileChoice.track:
-      if (!await ctrl.lfsTrack(patterns)) return;
-      // Make sure LFS hooks exist so the push uploads the files.
-      if (!await ctrl.repo.lfsHooksInstalled()) await ctrl.repo.lfsInstallHooks();
-      await ctrl.refreshStatus();
-      ctrl.toggleIncluded('.gitattributes', true);
-      await ctrl.commit(andPush: andPush);
+  final choice =
+      await showCommitOperationDialog(context, ctrl, andPush: andPush);
+  if (choice == null || !context.mounted) return;
+  if (trackLargeFiles) {
+    if (!await ctrl.lfsTrack(patterns)) return;
+    // Make sure LFS hooks exist so the push uploads the files.
+    if (!await ctrl.repo.lfsHooksInstalled()) await ctrl.repo.lfsInstallHooks();
+    await ctrl.refreshStatus();
+    ctrl.toggleIncluded('.gitattributes', true);
   }
+  final account =
+      ctrl.accounts.accounts.where((a) => a.id == choice.accountId).firstOrNull;
+  await ctrl.commit(
+    andPush: andPush,
+    authorName: choice.name,
+    authorEmail: choice.email,
+    pushAccount: account,
+  );
 }
 
 /// `*.psd` for files with an extension, else the exact path.
 String _patternFor(String path) {
   final name = path.split('/').last;
   final dot = name.lastIndexOf('.');
-  if (dot > 0 && dot < name.length - 1) return '*.${name.substring(dot + 1).toLowerCase()}';
+  if (dot > 0 && dot < name.length - 1)
+    return '*.${name.substring(dot + 1).toLowerCase()}';
   return path;
 }
 
 class _LargeFilesDialog extends StatelessWidget {
-  const _LargeFilesDialog({required this.files, required this.patterns, required this.lfsInstalled});
+  const _LargeFilesDialog(
+      {required this.files,
+      required this.patterns,
+      required this.lfsInstalled});
 
   final List<(FileChange, int)> files;
   final List<String> patterns;
@@ -102,12 +118,17 @@ class _LargeFilesDialog extends StatelessWidget {
             child: ListView(shrinkWrap: true, children: [
               for (final (f, size) in files)
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   child: Row(children: [
-                    Expanded(child: Text(f.path, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                    Expanded(
+                        child: Text(f.path,
+                            maxLines: 1, overflow: TextOverflow.ellipsis)),
                     Text(formatBytes(size),
                         style: TextStyle(
-                            color: size > 100 * 1024 * 1024 ? c.error : c.textSecondary)),
+                            color: size > 100 * 1024 * 1024
+                                ? c.error
+                                : c.textSecondary)),
                   ]),
                 ),
             ]),
@@ -117,13 +138,16 @@ class _LargeFilesDialog extends StatelessWidget {
             Text.rich(TextSpan(children: [
               const TextSpan(text: 'Recommended: store '),
               TextSpan(
-                  text: patterns.join(', '), style: const TextStyle(fontWeight: FontWeight.w600)),
+                  text: patterns.join(', '),
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
               const TextSpan(
-                  text: ' with Git LFS. EasyGit updates .gitattributes and commits it together '
+                  text:
+                      ' with Git LFS. EasyGit updates .gitattributes and commits it together '
                       'with these files.'),
             ]))
           else
-            Text('Git LFS is not installed, so EasyGit cannot store them with LFS.',
+            Text(
+                'Git LFS is not installed, so EasyGit cannot store them with LFS.',
                 style: TextStyle(color: c.warning)),
         ],
       ),
@@ -131,7 +155,8 @@ class _LargeFilesDialog extends StatelessWidget {
         IdeButton(label: 'Cancel', onPressed: () => Navigator.pop(context)),
         IdeButton(
           label: 'Commit Anyway',
-          onPressed: () => Navigator.pop(context, _LargeFileChoice.commitAnyway),
+          onPressed: () =>
+              Navigator.pop(context, _LargeFileChoice.commitAnyway),
         ),
         if (lfsInstalled)
           IdeButton(

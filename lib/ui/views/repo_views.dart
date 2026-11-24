@@ -5,8 +5,10 @@ import '../../state/repos_state.dart';
 import '../../theme/ide_theme.dart';
 import '../commit/commit_panel.dart';
 import '../diff/diff_view.dart';
+import '../files/repo_files_view.dart';
 import '../format.dart';
-import '../lfs/lfs_dialog.dart';
+import '../lfs/lfs_view.dart';
+import '../repo/repo_settings_view.dart';
 import 'branches_view.dart';
 import 'stashes_view.dart';
 import 'worktrees_view.dart';
@@ -32,6 +34,8 @@ class RepoMain extends StatelessWidget {
           RepoView.branches: ctrl.localBranches.length,
           RepoView.stashes: ctrl.stashes.length,
           RepoView.worktrees: ctrl.worktrees.length,
+          RepoView.lfs: ctrl.lfs.files.length,
+          RepoView.files: ctrl.changedRepoFileCount,
         };
         return Column(children: [
           Container(
@@ -39,17 +43,23 @@ class RepoMain extends StatelessWidget {
             color: c.panelBg,
             padding: const EdgeInsets.only(left: 6),
             child: Row(children: [
-              for (final v in RepoView.values)
-                _Tab(
-                  label: v.label,
-                  count: counts[v],
-                  highlight: v == RepoView.changes && (counts[v] ?? 0) > 0,
-                  active: ctrl.view == v,
-                  shortcut: shortcutLabel('${v.index + 1}'),
-                  onTap: () => ctrl.setView(v),
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: [
+                    for (final v in RepoView.values)
+                      _Tab(
+                        label: v.label,
+                        count: counts[v],
+                        highlight:
+                            v == RepoView.changes && (counts[v] ?? 0) > 0,
+                        active: ctrl.view == v,
+                        shortcut: shortcutLabel('${v.index + 1}'),
+                        onTap: () => ctrl.setView(v),
+                      ),
+                  ]),
                 ),
-              const Spacer(),
-              if (ctrl.lfs.usesLfs) _LfsPill(ctrl: ctrl),
+              ),
               const SizedBox(width: 8),
             ]),
           ),
@@ -64,51 +74,14 @@ class RepoMain extends StatelessWidget {
                 RepoView.branches => BranchesView(ctrl: ctrl, repos: repos),
                 RepoView.stashes => StashesView(ctrl: ctrl),
                 RepoView.worktrees => WorktreesView(ctrl: ctrl, repos: repos),
+                RepoView.lfs => LfsView(ctrl: ctrl),
+                RepoView.files => RepoFilesView(ctrl: ctrl),
+                RepoView.settings => RepoSettingsView(ctrl: ctrl),
               },
             ),
           ),
         ]);
       },
-    );
-  }
-}
-
-/// Compact LFS status in the tab bar; opens the LFS dialog.
-class _LfsPill extends StatelessWidget {
-  const _LfsPill({required this.ctrl});
-
-  final RepoController ctrl;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = IdeColors.of(context);
-    final lfs = ctrl.lfs;
-    final missing = lfs.missing.length;
-    final warn = lfs.needsSetup;
-    final label = warn
-        ? 'LFS · setup needed'
-        : (missing > 0 ? 'LFS · $missing not downloaded' : 'LFS · ${lfs.files.length} files');
-    final color = warn ? c.warning : (missing > 0 ? c.accent : c.textSecondary);
-    return HoverBuilder(
-      cursor: SystemMouseCursors.click,
-      builder: (context, hovered) => GestureDetector(
-        onTap: () => showLfsDialog(context, ctrl),
-        child: Container(
-          height: 24,
-          padding: const EdgeInsets.symmetric(horizontal: 9),
-          decoration: BoxDecoration(
-            color: hovered ? c.hover : null,
-            border: Border.all(color: color.withAlpha(140)),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(children: [
-            Icon(warn ? Icons.warning_amber : (missing > 0 ? Icons.cloud_download_outlined : Icons.cloud_done_outlined),
-                size: 13, color: color),
-            const SizedBox(width: 5),
-            Text(label, style: TextStyle(fontSize: 12, color: color)),
-          ]),
-        ),
-      ),
     );
   }
 }
@@ -135,9 +108,13 @@ class _LfsSetupStrip extends StatelessWidget {
               : 'This repository uses Git LFS, but git-lfs is not installed. Large files show as small pointer files.'),
         ),
         if (installed)
-          IdeButton(label: 'Set Up LFS', primary: true, onPressed: ctrl.lfsInstallHooks)
+          IdeButton(
+              label: 'Set Up LFS',
+              primary: true,
+              onPressed: ctrl.lfsInstallHooks)
         else
-          IdeButton(label: 'Details...', onPressed: () => showLfsDialog(context, ctrl)),
+          IdeButton(
+              label: 'Details...', onPressed: () => ctrl.setView(RepoView.lfs)),
       ]),
     );
   }
@@ -176,7 +153,8 @@ class _Tab extends StatelessWidget {
             decoration: BoxDecoration(
               color: hovered && !active ? c.hover.withAlpha(120) : null,
               border: Border(
-                bottom: BorderSide(color: active ? c.accent : Colors.transparent, width: 2),
+                bottom: BorderSide(
+                    color: active ? c.accent : Colors.transparent, width: 2),
               ),
             ),
             child: Row(children: [
@@ -187,12 +165,14 @@ class _Tab extends StatelessWidget {
               if (count != null && count! > 0) ...[
                 const SizedBox(width: 6),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                   decoration: BoxDecoration(
                     color: highlight ? c.accent.withAlpha(60) : c.hover,
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text('$count', style: TextStyle(fontSize: 11, color: c.text)),
+                  child: Text('$count',
+                      style: TextStyle(fontSize: 11, color: c.text)),
                 ),
               ],
             ]),
@@ -205,35 +185,46 @@ class _Tab extends StatelessWidget {
 
 /// Working tree: changed files and commit box on the left, the selected
 /// file's diff on the right.
-class ChangesView extends StatelessWidget {
+class ChangesView extends StatefulWidget {
   const ChangesView({super.key, required this.ctrl});
 
   final RepoController ctrl;
 
   @override
+  State<ChangesView> createState() => _ChangesViewState();
+}
+
+class _ChangesViewState extends State<ChangesView> {
+  final _panelKey = GlobalKey();
+
+  @override
   Widget build(BuildContext context) {
     final c = IdeColors.of(context);
-    return SplitPane(
-      axis: Axis.horizontal,
-      initialSize: 380,
-      minSize: 260,
-      minOther: 300,
-      first: Container(color: c.panelBg, child: CommitPanel(ctrl: ctrl)),
-      second: ListenableBuilder(
-        listenable: ctrl,
-        builder: (context, _) {
-          final diff = ctrl.changesDiff;
-          if (diff == null) {
-            return Container(
-              color: c.editorBg,
-              child: EmptyHint(ctrl.status?.changes.isEmpty ?? false
-                  ? 'Working tree clean. Nothing to commit.'
-                  : 'Select a file to see its changes'),
-            );
-          }
-          return DiffView(key: ValueKey(diff.id), tab: diff);
-        },
-      ),
+    final ctrl = widget.ctrl;
+    return ListenableBuilder(
+      listenable: ctrl,
+      builder: (context, _) {
+        final changes = Container(
+          color: c.panelBg,
+          child: CommitPanel(key: _panelKey, ctrl: ctrl),
+        );
+        final diff = ctrl.changesDiff;
+        if (diff == null) {
+          return changes;
+        }
+        return SplitPane(
+          axis: Axis.horizontal,
+          initialSize: 380,
+          minSize: 260,
+          minOther: 300,
+          first: changes,
+          second: DiffView(
+            key: ValueKey(diff.id),
+            tab: diff,
+            onClose: ctrl.closeWorkingDiff,
+          ),
+        );
+      },
     );
   }
 }
@@ -260,7 +251,8 @@ class HistoryView extends StatelessWidget {
         initialSize: 360,
         minSize: 240,
         minOther: 300,
-        first: Container(color: c.panelBg, child: CommitDetailsPanel(ctrl: ctrl)),
+        first:
+            Container(color: c.panelBg, child: CommitDetailsPanel(ctrl: ctrl)),
         second: ListenableBuilder(
           listenable: ctrl,
           builder: (context, _) {

@@ -29,6 +29,11 @@ class GitRunner {
   /// repository is bound to one account (see `RepoController.setAccount`).
   List<GitCredential>? credentialOverride;
 
+  /// Credentials for the LFS server of this repository only. They are tried
+  /// before the accounts for `git lfs` commands, so a repository can keep its
+  /// LFS token separate from the Git account (see `RepoController.lfsCredential`).
+  List<GitCredential> lfsCredentials = const [];
+
   /// Path or name of the git executable.
   static String executable = 'git';
 
@@ -37,7 +42,14 @@ class GitRunner {
   /// Signed-in hosting accounts, used for network commands.
   static List<GitCredential> credentials = const [];
 
-  static const _networkCommands = {'fetch', 'pull', 'push', 'clone', 'ls-remote', 'lfs'};
+  static const _networkCommands = {
+    'fetch',
+    'pull',
+    'push',
+    'clone',
+    'ls-remote',
+    'lfs'
+  };
 
   /// Proxy settings for every git process (see `NetworkSettings`), passed as
   /// environment variables so secrets never appear on the command line.
@@ -46,25 +58,39 @@ class GitRunner {
   /// Disables system and global credential helpers, then adds one helper per
   /// signed-in server. The secrets travel in environment variables, so they
   /// never appear on the command line.
-  static (List<String>, Map<String, String>) _credentialArgs(
-      List<String> args, List<GitCredential> credentials) {
+  ///
+  /// [lfsCredentials] answer first for `git lfs` commands, where the LFS server
+  /// may need a token of its own; for the other network commands the accounts
+  /// come first. One server is answered once, so a credential never shadows
+  /// itself.
+  static (List<String>, Map<String, String>) credentialArgs(
+    List<String> args,
+    List<GitCredential> credentials, {
+    List<GitCredential> lfsCredentials = const [],
+  }) {
     if (args.isEmpty || !_networkCommands.contains(args.first)) {
       return (const [], const {});
     }
+    final ordered = args.first == 'lfs'
+        ? [...lfsCredentials, ...credentials]
+        : [...credentials, ...lfsCredentials];
     final config = ['-c', 'credential.helper='];
     final env = <String, String>{};
-    for (var i = 0; i < credentials.length; i++) {
-      final c = credentials[i];
-      env['EASYGIT_USER_$i'] = c.username;
-      env['EASYGIT_PASS_$i'] = c.password;
+    final servers = <String>{};
+    var index = 0;
+    for (final c in ordered) {
+      if (!servers.add(c.server)) continue;
+      env['EASYGIT_USER_$index'] = c.username;
+      env['EASYGIT_PASS_$index'] = c.password;
       config
         // An empty helper resets the list, so only ours answers for this server.
         ..addAll(['-c', 'credential.${c.server}.helper='])
         ..addAll([
           '-c',
           'credential.${c.server}.helper=!f() { test "\$1" = get || return 0; '
-              'echo "username=\$EASYGIT_USER_$i"; echo "password=\$EASYGIT_PASS_$i"; }; f',
+              'echo "username=\$EASYGIT_USER_$index"; echo "password=\$EASYGIT_PASS_$index"; }; f',
         ]);
+      index++;
     }
     return (config, env);
   }
@@ -82,30 +108,61 @@ class GitRunner {
   ///
   /// When [log] is true the command and its output go to the Git console.
   /// With [timeout] the process is killed when it takes longer. [env] adds
-  /// environment variables for this call only.
+  /// environment variables for this call only. [onStdout] and [onStderr] receive
+  /// output chunks while the process is running; full output is still returned in logs.
   Future<String> run(List<String> args,
-      {String? stdin, bool log = false, Duration? timeout, Map<String, String>? env}) async {
+      {String? stdin,
+      bool log = false,
+      Duration? timeout,
+      Map<String, String>? env,
+      void Function(String chunk)? onStdout,
+      void Function(String chunk)? onStderr}) async {
     final command = 'git ${args.map(_quote).join(' ')}';
     if (!isSupported) {
-      throw GitException(command, 'The git command line is not available on this platform.', -1);
+      throw GitException(command,
+          'The git command line is not available on this platform.', -1);
     }
-    final (credentialConfig, credentialEnv) =
-        _credentialArgs(args, credentialOverride ?? credentials);
+    final (credentialConfig, credentialEnv) = credentialArgs(
+        args, credentialOverride ?? credentials,
+        lfsCredentials: lfsCredentials);
     final Process process;
     try {
       process = await Process.start(
         executable,
-        ['-c', 'core.quotepath=false', '-c', 'color.ui=never', ...credentialConfig, ...args],
+        [
+          '-c',
+          'core.quotepath=false',
+          '-c',
+          'color.ui=never',
+          ...credentialConfig,
+          ...args
+        ],
         workingDirectory: workDir,
         environment: {..._env, ...networkEnv, ...credentialEnv, ...?env},
       );
     } on ProcessException catch (e) {
       throw GitException(
-          command, 'Unable to start git (${e.message}). Is Git installed and on PATH?', -1);
+          command,
+          'Unable to start git (${e.message}). Is Git installed and on PATH?',
+          -1);
     }
     const decoder = Utf8Decoder(allowMalformed: true);
-    final out = process.stdout.transform(decoder).join();
-    final err = process.stderr.transform(decoder).join();
+    final out = () async {
+      final output = StringBuffer();
+      await for (final chunk in process.stdout.transform(decoder)) {
+        output.write(chunk);
+        onStdout?.call(chunk);
+      }
+      return output.toString();
+    }();
+    final err = () async {
+      final output = StringBuffer();
+      await for (final chunk in process.stderr.transform(decoder)) {
+        output.write(chunk);
+        onStderr?.call(chunk);
+      }
+      return output.toString();
+    }();
     try {
       if (stdin != null) process.stdin.add(utf8.encode(stdin));
       await process.stdin.close();
@@ -120,7 +177,8 @@ class GitRunner {
         exitCode = await process.exitCode.timeout(timeout);
       } on TimeoutException {
         process.kill();
-        throw GitException(command, 'Timed out after ${timeout.inSeconds} s.', -2);
+        throw GitException(
+            command, 'Timed out after ${timeout.inSeconds} s.', -2);
       }
     }
     final stdout = await out;
@@ -131,15 +189,19 @@ class GitRunner {
         time: DateTime.now(),
         command: command,
         exitCode: exitCode,
-        output: [stdout.trim(), stderr.trim()].where((s) => s.isNotEmpty).join('\n'),
+        output: [stdout.trim(), stderr.trim()]
+            .where((s) => s.isNotEmpty)
+            .join('\n'),
       ));
     }
     if (exitCode != 0) {
       final message = stderr.trim().isNotEmpty ? stderr.trim() : stdout.trim();
-      throw GitException(command, message.isEmpty ? '$command failed' : message, exitCode);
+      throw GitException(
+          command, message.isEmpty ? '$command failed' : message, exitCode);
     }
     return stdout;
   }
 
-  static String _quote(String arg) => arg.isEmpty || arg.contains(' ') ? '"$arg"' : arg;
+  static String _quote(String arg) =>
+      arg.isEmpty || arg.contains(' ') ? '"$arg"' : arg;
 }

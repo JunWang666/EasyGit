@@ -25,6 +25,7 @@ class _CommitPanelState extends State<CommitPanel> {
   final _collapsed = <String>{};
   final _focus = FocusNode();
   String? _anchor;
+  bool _folderView = false;
 
   RepoController get ctrl => widget.ctrl;
 
@@ -34,8 +35,9 @@ class _CommitPanelState extends State<CommitPanel> {
     super.dispose();
   }
 
-  List<FileChange> get _selectedChanges =>
-      (ctrl.status?.changes ?? const []).where((c) => _selected.contains(c.path)).toList();
+  List<FileChange> get _selectedChanges => (ctrl.status?.changes ?? const [])
+      .where((c) => _selected.contains(c.path))
+      .toList();
 
   void _onRowTap(FileChange change, List<FileChange> ordered) {
     _focus.requestFocus();
@@ -72,7 +74,8 @@ class _CommitPanelState extends State<CommitPanel> {
     if (ordered.isEmpty) return;
     final currentPath = _anchor ?? ctrl.changesDiff?.change.path;
     final index = ordered.indexWhere((c) => c.path == currentPath);
-    final next = ordered[(index < 0 ? 0 : index + delta).clamp(0, ordered.length - 1)];
+    final next =
+        ordered[(index < 0 ? 0 : index + delta).clamp(0, ordered.length - 1)];
     setState(() {
       _selected
         ..clear()
@@ -86,17 +89,22 @@ class _CommitPanelState extends State<CommitPanel> {
     final tracked = files.where((f) => !f.isUntracked).toList();
     if (tracked.isEmpty) return;
     final list = tracked.take(10).map((f) => '  ${f.path}').join('\n');
-    final more = tracked.length > 10 ? '\n  ...and ${tracked.length - 10} more' : '';
+    final more =
+        tracked.length > 10 ? '\n  ...and ${tracked.length - 10} more' : '';
     final ok = await showConfirmDialog(context,
         title: 'Rollback Changes',
-        message: 'Local changes in these files will be discarded:\n\n$list$more',
+        message:
+            'Local changes in these files will be discarded:\n\n$list$more',
         okLabel: 'Rollback');
     if (ok) await ctrl.rollback(tracked);
   }
 
   Future<void> _stash() async {
     final message = await showInputDialog(context,
-        title: 'Stash Changes', label: 'Message (optional):', initial: 'WIP', okLabel: 'Stash');
+        title: 'Stash Changes',
+        label: 'Message (optional):',
+        initial: 'WIP',
+        okLabel: 'Stash');
     if (message != null) await ctrl.stash(message);
   }
 
@@ -121,7 +129,8 @@ class _CommitPanelState extends State<CommitPanel> {
         IdeMenuItem('Add to VCS',
             icon: Icons.add,
             iconColor: c.success,
-            onTap: () => ctrl.addToVcs(files.where((f) => f.isUntracked).toList())),
+            onTap: () =>
+                ctrl.addToVcs(files.where((f) => f.isUntracked).toList())),
       IdeMenuItem('Rollback...',
           icon: Icons.undo,
           enabled: files.any((f) => !f.isUntracked),
@@ -131,7 +140,8 @@ class _CommitPanelState extends State<CommitPanel> {
           icon: Icons.copy,
           onTap: () => Clipboard.setData(ClipboardData(text: change.path))),
       IdeMenuItem('Copy Absolute Path',
-          onTap: () => Clipboard.setData(ClipboardData(text: '${ctrl.repo.root}/${change.path}'))),
+          onTap: () => Clipboard.setData(
+              ClipboardData(text: '${ctrl.repo.root}/${change.path}'))),
     ]);
   }
 
@@ -148,11 +158,21 @@ class _CommitPanelState extends State<CommitPanel> {
             title: 'Local Changes',
             trailing: Row(children: [
               IdeIconButton(
-                  icon: Icons.refresh, tooltip: 'Refresh', onPressed: ctrl.refreshAll),
+                icon: Icons.account_tree_outlined,
+                tooltip: _folderView ? 'Show Flat List' : 'Show Folder Tree',
+                selected: _folderView,
+                onPressed: () => setState(() => _folderView = !_folderView),
+              ),
+              IdeIconButton(
+                  icon: Icons.refresh,
+                  tooltip: 'Refresh',
+                  onPressed: ctrl.refreshAll),
               IdeIconButton(
                 icon: Icons.undo,
                 tooltip: 'Rollback...',
-                onPressed: selected.any((f) => !f.isUntracked) ? () => _rollback(selected) : null,
+                onPressed: selected.any((f) => !f.isUntracked)
+                    ? () => _rollback(selected)
+                    : null,
               ),
               IdeIconButton(
                 icon: Icons.inventory_2_outlined,
@@ -182,30 +202,35 @@ class _CommitPanelState extends State<CommitPanel> {
   }
 
   Widget _changesTree(List<FileChange> tracked, List<FileChange> untracked) {
-    if (ctrl.status == null) return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    if (ctrl.status == null) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    }
     if (tracked.isEmpty && untracked.isEmpty) {
       return const EmptyHint('No local changes');
     }
-    final ordered = [
-      if (!_collapsed.contains('changes')) ...tracked,
-      if (!_collapsed.contains('unversioned')) ...untracked,
-    ];
-    List<Widget> rows() => [
-      if (tracked.isNotEmpty) ...[
-        _groupRow('changes', 'Changes', tracked),
-        if (!_collapsed.contains('changes'))
-          for (final f in tracked) _fileRow(f, ordered),
-      ],
-      if (untracked.isNotEmpty) ...[
-        _groupRow('unversioned', 'Unversioned Files', untracked),
-        if (!_collapsed.contains('unversioned'))
-          for (final f in untracked) _fileRow(f, ordered),
-      ],
-    ];
+    final ordered = <FileChange>[];
+    List<Widget> rows() {
+      ordered.clear();
+      return [
+        if (tracked.isNotEmpty) ...[
+          _groupRow('changes', 'Changes', tracked),
+          if (!_collapsed.contains('changes'))
+            ..._fileRows('changes', tracked, ordered),
+        ],
+        if (untracked.isNotEmpty) ...[
+          _groupRow('unversioned', 'Unversioned Files', untracked),
+          if (!_collapsed.contains('unversioned'))
+            ..._fileRows('unversioned', untracked, ordered),
+        ],
+      ];
+    }
+
     return Focus(
       focusNode: _focus,
       onKeyEvent: (node, event) {
-        if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
+        if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+          return KeyEventResult.ignored;
+        }
         if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
           _moveSelection(ordered, 1);
           return KeyEventResult.handled;
@@ -215,13 +240,15 @@ class _CommitPanelState extends State<CommitPanel> {
           return KeyEventResult.handled;
         }
         if (event is! KeyDownEvent) return KeyEventResult.ignored;
-        if (event.logicalKey == LogicalKeyboardKey.space && _selected.isNotEmpty) {
+        if (event.logicalKey == LogicalKeyboardKey.space &&
+            _selected.isNotEmpty) {
           final changes = _selectedChanges;
           final include = !changes.every((c) => ctrl.included.contains(c.path));
           ctrl.setIncluded(changes, include);
           return KeyEventResult.handled;
         }
-        if (event.logicalKey == LogicalKeyboardKey.enter && _selected.length == 1) {
+        if (event.logicalKey == LogicalKeyboardKey.enter &&
+            _selected.length == 1) {
           ctrl.openWorkingDiff(_selectedChanges.first);
           return KeyEventResult.handled;
         }
@@ -240,10 +267,13 @@ class _CommitPanelState extends State<CommitPanel> {
     final value = count == 0 ? false : (count == files.length ? true : null);
     final collapsed = _collapsed.contains(id);
     return ListRow(
-      onTap: () => setState(() => collapsed ? _collapsed.remove(id) : _collapsed.add(id)),
+      onTap: () => setState(
+          () => collapsed ? _collapsed.remove(id) : _collapsed.add(id)),
       child: Row(children: [
-        Icon(collapsed ? Icons.chevron_right : Icons.expand_more, size: 16, color: c.icon),
-        _checkbox(value, (v) => ctrl.setIncluded(files, v ?? false), tristate: true),
+        Icon(collapsed ? Icons.chevron_right : Icons.expand_more,
+            size: 16, color: c.icon),
+        _checkbox(value, (v) => ctrl.setIncluded(files, v ?? false),
+            tristate: true),
         const SizedBox(width: 4),
         Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(width: 8),
@@ -253,23 +283,99 @@ class _CommitPanelState extends State<CommitPanel> {
     );
   }
 
-  Widget _fileRow(FileChange f, List<FileChange> ordered) {
+  List<Widget> _fileRows(
+      String groupId, List<FileChange> files, List<FileChange> ordered) {
+    if (!_folderView) {
+      return [for (final f in files) _fileRow(f, ordered)];
+    }
+    return _folderContents(groupId, '', files, 1, ordered);
+  }
+
+  List<Widget> _folderContents(String groupId, String path,
+      List<FileChange> files, int depth, List<FileChange> ordered) {
+    final direct = <FileChange>[];
+    final folders = <String, List<FileChange>>{};
+    for (final file in files) {
+      final relative =
+          path.isEmpty ? file.path : file.path.substring(path.length + 1);
+      final slash = relative.indexOf('/');
+      if (slash < 0) {
+        direct.add(file);
+      } else {
+        folders.putIfAbsent(relative.substring(0, slash), () => []).add(file);
+      }
+    }
+    final folderNames = folders.keys.toList()..sort();
+    return [
+      for (final name in folderNames) ...[
+        _folderRow(groupId, path.isEmpty ? name : '$path/$name', name,
+            folders[name]!, depth),
+        if (!_collapsed
+            .contains('folder:$groupId:${path.isEmpty ? name : '$path/$name'}'))
+          ..._folderContents(groupId, path.isEmpty ? name : '$path/$name',
+              folders[name]!, depth + 1, ordered),
+      ],
+      for (final file in direct)
+        _fileRow(file, ordered, depth: depth, folderView: true),
+    ];
+  }
+
+  Widget _folderRow(String groupId, String path, String name,
+      List<FileChange> files, int depth) {
+    final c = IdeColors.of(context);
+    final id = 'folder:$groupId:$path';
+    final collapsed = _collapsed.contains(id);
+    final count = files.where((f) => ctrl.included.contains(f.path)).length;
+    final value = count == 0 ? false : (count == files.length ? true : null);
     return ListRow(
-      indent: 18,
+      key: ValueKey(id),
+      indent: depth * 18,
+      onTap: () => setState(
+          () => collapsed ? _collapsed.remove(id) : _collapsed.add(id)),
+      child: Row(children: [
+        Icon(collapsed ? Icons.chevron_right : Icons.expand_more,
+            size: 16, color: c.icon),
+        _checkbox(value, (v) => ctrl.setIncluded(files, v ?? false),
+            tristate: true),
+        const SizedBox(width: 4),
+        Icon(collapsed ? Icons.folder_outlined : Icons.folder_open_outlined,
+            size: 16, color: c.icon),
+        const SizedBox(width: 6),
+        Expanded(
+            child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis)),
+        const SizedBox(width: 8),
+        Text('${files.length}',
+            style: TextStyle(fontSize: 11, color: c.textSecondary)),
+      ]),
+    );
+  }
+
+  Widget _fileRow(FileChange f, List<FileChange> ordered,
+      {int depth = 1, bool folderView = false}) {
+    ordered.add(f);
+    return ListRow(
+      indent: depth * 18,
       selected: _selected.contains(f.path) ||
           (_selected.isEmpty && ctrl.changesDiff?.change.path == f.path),
       focused: _focus.hasFocus,
       onTap: () => _onRowTap(f, ordered),
       onContextMenu: (pos) => _contextMenu(pos, f),
       child: Row(children: [
-        _checkbox(ctrl.included.contains(f.path), (v) => ctrl.toggleIncluded(f.path, v ?? false)),
+        if (folderView) const SizedBox(width: 16),
+        _checkbox(ctrl.included.contains(f.path),
+            (v) => ctrl.toggleIncluded(f.path, v ?? false)),
         const SizedBox(width: 4),
-        Expanded(child: FileChangeLabel(change: f, lfs: ctrl.lfs.isTracked(f.path))),
+        Expanded(
+            child: FileChangeLabel(
+                change: f,
+                showDirectory: !folderView,
+                lfs: ctrl.lfs.isTracked(f.path))),
       ]),
     );
   }
 
-  Widget _checkbox(bool? value, ValueChanged<bool?> onChanged, {bool tristate = false}) {
+  Widget _checkbox(bool? value, ValueChanged<bool?> onChanged,
+      {bool tristate = false}) {
     final c = IdeColors.of(context);
     return SizedBox(
       width: 22,
@@ -339,7 +445,8 @@ class _CommitPanelState extends State<CommitPanel> {
               onPressed: busy ? null : () => commitFlow(context, ctrl)),
           IdeButton(
               label: ctrl.amend ? 'Amend and Push...' : 'Commit and Push...',
-              onPressed: busy ? null : () => commitFlow(context, ctrl, andPush: true)),
+              onPressed:
+                  busy ? null : () => commitFlow(context, ctrl, andPush: true)),
         ]),
       ]),
     );

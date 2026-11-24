@@ -7,6 +7,7 @@ import '../../state/repos_state.dart';
 import '../../system/open_in.dart';
 import '../../theme/ide_theme.dart';
 import '../format.dart';
+import '../repo/operation_identity_flow.dart';
 import '../widgets/common.dart';
 import '../widgets/dialogs.dart';
 import '../settings/ide_choice.dart';
@@ -38,7 +39,9 @@ class MainToolbar extends StatelessWidget {
             : Icons.dark_mode_outlined,
         tooltip: 'Toggle Theme',
         onPressed: () => settings.setThemeMode(
-            Theme.of(context).brightness == Brightness.dark ? ThemeMode.light : ThemeMode.dark),
+            Theme.of(context).brightness == Brightness.dark
+                ? ThemeMode.light
+                : ThemeMode.dark),
       ),
       IdeIconButton(
         icon: Icons.settings_outlined,
@@ -76,8 +79,10 @@ class MainToolbar extends StatelessWidget {
             label: fileManagerName,
             iconOnly: _narrow(context),
             tooltip: 'Open in $fileManagerName',
-            onPressed: () => openInFileManager(ctrl.repo.root, inTab: settings.explorerOpenInTab)
-                .catchError((Object e) => ctrl.reportError('Cannot open $fileManagerName', '$e')),
+            onPressed: () => openInFileManager(ctrl.repo.root,
+                    inTab: settings.explorerOpenInTab)
+                .catchError((Object e) =>
+                    ctrl.reportError('Cannot open $fileManagerName', '$e')),
           ),
           _OpenInIdeButton(ctrl: ctrl, settings: settings),
           const ToolbarSeparator(),
@@ -107,7 +112,7 @@ class MainToolbar extends StatelessWidget {
                     'Push (${shortcutLabel('K', shift: true)})'
                 : 'Push (${shortcutLabel('K', shift: true)})',
             badge: status?.ahead ?? 0,
-            onPressed: idle ? () => ctrl.push() : null,
+            onPressed: idle ? () => pushFlow(context, ctrl) : null,
           ),
           const ToolbarSeparator(),
           _ActionButton(
@@ -137,14 +142,19 @@ class MainToolbar extends StatelessWidget {
             label: 'Branch',
             tooltip: 'New branch from HEAD',
             onPressed: () async {
-              final result = await showNewBranchDialog(context, ctrl.currentBranchLabel);
+              final result =
+                  await showNewBranchDialog(context, ctrl.currentBranchLabel);
               if (result != null) {
-                await ctrl.createBranch(result.name, 'HEAD', checkout: result.checkout);
+                await ctrl.createBranch(result.name, 'HEAD',
+                    checkout: result.checkout);
               }
             },
           ),
           const ToolbarSeparator(),
-          IdeIconButton(icon: Icons.refresh, tooltip: 'Refresh (F5)', onPressed: repos.refreshAll),
+          IdeIconButton(
+              icon: Icons.refresh,
+              tooltip: 'Refresh (F5)',
+              onPressed: repos.refreshAll),
           themeButton,
         ]);
       },
@@ -174,7 +184,8 @@ class MainToolbar extends StatelessWidget {
                     end: Alignment.bottomRight),
                 borderRadius: BorderRadius.circular(4),
               ),
-              child: const Icon(Icons.call_split, color: Colors.white, size: 12),
+              child:
+                  const Icon(Icons.call_split, color: Colors.white, size: 12),
             ),
             const SizedBox(width: 10),
           ],
@@ -234,11 +245,15 @@ class _ActionButton extends StatelessWidget {
               borderRadius: BorderRadius.circular(6),
             ),
             child: Row(children: [
-              Icon(icon, size: 16, color: enabled ? (color ?? c.icon) : c.textDisabled),
+              Icon(icon,
+                  size: 16,
+                  color: enabled ? (color ?? c.icon) : c.textDisabled),
               if (!iconOnly) ...[
                 const SizedBox(width: 5),
                 Text(label,
-                    style: TextStyle(fontSize: 12.5, color: enabled ? c.text : c.textDisabled)),
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        color: enabled ? c.text : c.textDisabled)),
               ],
               if (badge > 0) ...[
                 const SizedBox(width: 5),
@@ -253,7 +268,9 @@ class _ActionButton extends StatelessWidget {
                   ),
                   child: Text(badge > 999 ? '999+' : '$badge',
                       style: const TextStyle(
-                          fontSize: 10.5, fontWeight: FontWeight.w600, color: Colors.white)),
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white)),
                 ),
               ],
             ]),
@@ -319,13 +336,15 @@ class _OpenInIdeButtonState extends State<_OpenInIdeButton> {
       if (_ides.isEmpty) const IdeMenuItem('No IDE found', enabled: false),
       for (final ide in _ides)
         IdeMenuItem(ide.name,
-            icon: selected?.id == ide.id ? Icons.check : null, onTap: () => _choose(ide)),
+            icon: selected?.id == ide.id ? Icons.check : null,
+            onTap: () => _choose(ide)),
       if (custom != null)
         IdeMenuItem(customIde(custom).name,
             icon: selected?.id == 'custom' ? Icons.check : null,
             onTap: () => _choose(customIde(custom))),
       const IdeMenuItem.divider(),
-      IdeMenuItem('Choose Other...', icon: Icons.more_horiz, onTap: _chooseOther),
+      IdeMenuItem('Choose Other...',
+          icon: Icons.more_horiz, onTap: _chooseOther),
       IdeMenuItem('Rescan Installed IDEs',
           icon: Icons.refresh, onTap: () => _detect(refresh: true)),
     ]);
