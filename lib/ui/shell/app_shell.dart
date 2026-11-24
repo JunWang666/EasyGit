@@ -85,6 +85,7 @@ class _AppShellState extends State<AppShell> {
     if (ctrl == null) return;
     repos.select(ctrl);
     ctrl.setView(RepoView.changes);
+    ctrl.setCommitMessageCollapsed(false);
     WidgetsBinding.instance
         .addPostFrameCallback((_) => ctrl.messageFocus.requestFocus());
   }
@@ -103,7 +104,9 @@ class _AppShellState extends State<AppShell> {
       },
       primary(LogicalKeyboardKey.enter): () {
         final r = ctrl();
-        if (r != null) commitFlow(context, r);
+        if (r != null) {
+          commitFlow(context, r, identity: r.selectedCommitIdentity);
+        }
       },
       for (final v in RepoView.values)
         primary(LogicalKeyboardKey(LogicalKeyboardKey.digit1.keyId + v.index)):

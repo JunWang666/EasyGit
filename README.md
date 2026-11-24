@@ -18,8 +18,10 @@ editor.
     existing branch, open it in the sidebar as its own repository, remove it, or prune stale
     ones.
 - **Local Changes**: the changed files (*Changes* and *Unversioned Files*, with checkboxes
-  instead of a staging area) and the commit box on the left, and the selected file's diff on
-  the right. Arrow keys move through the files.
+  instead of a staging area) and a commit box on the left, and the selected file's diff on
+  the right. Commit Message is collapsed by default; Commit or its arrow expands it first.
+  The file list can show size and modification time. A selector next to Commit chooses the
+  repository default or a custom commit identity. Arrow keys move through the files.
 - **History**: the commit graph with Branch/User/text filters on top. Below it are the
   selected commit's message and changed files, and the selected file's diff.
 - **Repo Files**: the repository's own configuration and documentation files in a list, with

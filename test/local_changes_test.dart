@@ -7,6 +7,7 @@ import 'package:easygit/state/repo_controller.dart';
 import 'package:easygit/theme/ide_theme.dart';
 import 'package:easygit/ui/commit/commit_panel.dart';
 import 'package:easygit/ui/diff/diff_view.dart';
+import 'package:easygit/ui/format.dart';
 import 'package:easygit/ui/views/repo_views.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -59,6 +60,21 @@ void main() {
       home: Scaffold(body: CommitPanel(ctrl: ctrl)),
     ));
     await tester.pump();
+
+    expect(ctrl.commitMessageCollapsed, isTrue);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('Commit'), findsOneWidget);
+    expect(find.byKey(const Key('commit-identity-selector')), findsOneWidget);
+    await tester.tap(find.text('Commit'));
+    await tester.pump();
+    expect(ctrl.commitMessageCollapsed, isFalse);
+    expect(find.byType(TextField), findsOneWidget);
+    await tester.tap(find.byTooltip('Collapse Commit Message'));
+    await tester.pump();
+    expect(find.byType(TextField), findsNothing);
+    await tester.tap(find.byTooltip('Expand Commit Message'));
+    await tester.pump();
+    expect(find.byType(TextField), findsOneWidget);
 
     expect(find.byKey(const ValueKey('folder:changes:lib')), findsNothing);
     expect(find.text('a.dart  lib', findRichText: true), findsOneWidget);
@@ -151,6 +167,34 @@ void main() {
     expect(find.byType(DiffView), findsOneWidget);
     expect(find.byTooltip('Close Preview'), findsOneWidget);
     expect(tester.getSize(find.byType(CommitPanel)).width, 380);
+
+    await tester.runAsync(() => ctrl.setShowWorkingFileDetails(true));
+    await tester.pump();
+    final fileInfo = ctrl.workingFileInfo['lib/a.dart']!;
+    expect(fileInfo.size, 8);
+    expect(find.text('8 B'), findsOneWidget);
+    expect(find.text(formatLogDate(fileInfo.modified)), findsOneWidget);
+
+    await tester.runAsync(ctrl.loadCommitIdentity);
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('commit-identity-selector')));
+    await tester.pumpAndSettle();
+    expect(find.text('Default: Tester'), findsOneWidget);
+    await tester.tap(find.text('Custom Identity...'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const Key('commit-identity-name')), 'Second User');
+    await tester.enterText(
+        find.byKey(const Key('commit-identity-email')), 'second@example.com');
+    await tester.tap(find.text('Select'));
+    await tester.pumpAndSettle();
+    expect(ctrl.commitIdentityOverride?.name, 'Second User');
+    expect(find.text('Second User'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('commit-identity-selector')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Default: Tester'));
+    await tester.pumpAndSettle();
+    expect(ctrl.commitIdentityOverride, isNull);
 
     await tester.tap(find.byTooltip('Show Folder Tree'));
     await tester.pump();

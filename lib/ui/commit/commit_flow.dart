@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../git/git_repository.dart';
 import '../../git/lfs.dart';
 import '../../git/models.dart';
 import '../../state/repo_controller.dart';
@@ -15,9 +16,17 @@ const largeFileBytes = 50 * 1024 * 1024;
 
 enum _LargeFileChoice { track, commitAnyway }
 
-/// Commits the selected files after confirming the identity and any push account.
+/// Commits the selected files, using [identity] directly when the commit panel
+/// has already chosen one and otherwise confirming the operation in a dialog.
 Future<void> commitFlow(BuildContext context, RepoController ctrl,
-    {bool andPush = false}) async {
+    {bool andPush = false, RepoIdentity? identity}) async {
+  if (ctrl.commitMessageCollapsed) {
+    ctrl.setCommitMessageCollapsed(false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ctrl.messageFocus.requestFocus();
+    });
+    return;
+  }
   final selected = ctrl.status?.changes
           .where((c) => ctrl.included.contains(c.path))
           .toList() ??
@@ -53,9 +62,29 @@ Future<void> commitFlow(BuildContext context, RepoController ctrl,
     trackLargeFiles = choice == _LargeFileChoice.track;
   }
   if (!context.mounted) return;
-  final choice =
-      await showCommitOperationDialog(context, ctrl, andPush: andPush);
-  if (choice == null || !context.mounted) return;
+
+  final String name;
+  final String email;
+  final String? accountId;
+  if (identity?.name?.isNotEmpty == true &&
+      identity?.email?.isNotEmpty == true) {
+    name = identity!.name!;
+    email = identity.email!;
+    if (andPush) {
+      final push = await showPushAccountDialog(context, ctrl);
+      if (push == null || !context.mounted) return;
+      accountId = push.account?.id;
+    } else {
+      accountId = null;
+    }
+  } else {
+    final choice =
+        await showCommitOperationDialog(context, ctrl, andPush: andPush);
+    if (choice == null || !context.mounted) return;
+    name = choice.name;
+    email = choice.email;
+    accountId = choice.accountId;
+  }
   if (trackLargeFiles) {
     if (!await ctrl.lfsTrack(patterns)) return;
     // Make sure LFS hooks exist so the push uploads the files.
@@ -64,11 +93,11 @@ Future<void> commitFlow(BuildContext context, RepoController ctrl,
     ctrl.toggleIncluded('.gitattributes', true);
   }
   final account =
-      ctrl.accounts.accounts.where((a) => a.id == choice.accountId).firstOrNull;
+      ctrl.accounts.accounts.where((a) => a.id == accountId).firstOrNull;
   await ctrl.commit(
     andPush: andPush,
-    authorName: choice.name,
-    authorEmail: choice.email,
+    authorName: name,
+    authorEmail: email,
     pushAccount: account,
   );
 }

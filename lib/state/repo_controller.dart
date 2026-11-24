@@ -175,6 +175,13 @@ class AppNotification {
   final NotificationAction? action;
 }
 
+class WorkingFileInfo {
+  const WorkingFileInfo({required this.size, required this.modified});
+
+  final int size;
+  final DateTime modified;
+}
+
 /// State of an open repository, shared by every panel of the workspace.
 class RepoController extends ChangeNotifier {
   RepoController(this.repo, this.accounts, {this.tasks}) {
@@ -185,6 +192,7 @@ class RepoController extends ChangeNotifier {
       _applyAccount();
     });
     _loadLfsCredential();
+    loadCommitIdentity();
   }
 
   final GitRepository repo;
@@ -211,7 +219,46 @@ class RepoController extends ChangeNotifier {
     notifyListeners();
   }
 
+  RepoIdentity? commitIdentity;
+  RepoIdentity? commitIdentityOverride;
+  RepoIdentity? get selectedCommitIdentity =>
+      commitIdentityOverride ?? commitIdentity;
+
+  Future<RepoIdentity> loadCommitIdentity() async {
+    final identity = await repo.identity();
+    if (!_disposed) {
+      commitIdentity = identity;
+      notifyListeners();
+    }
+    return identity;
+  }
+
+  void setCommitIdentityOverride(RepoIdentity? identity) {
+    commitIdentityOverride = identity;
+    notifyListeners();
+  }
+
   RepoStatus? status;
+  bool commitMessageCollapsed = true;
+  bool showWorkingFileDetails = false;
+  Map<String, WorkingFileInfo> workingFileInfo = const {};
+
+  void setCommitMessageCollapsed(bool value) {
+    if (commitMessageCollapsed == value) return;
+    commitMessageCollapsed = value;
+    notifyListeners();
+  }
+
+  Future<void> setShowWorkingFileDetails(bool value) async {
+    if (showWorkingFileDetails == value) return;
+    showWorkingFileDetails = value;
+    notifyListeners();
+    if (value) {
+      await _refreshWorkingFileInfo();
+      notifyListeners();
+    }
+  }
+
   List<GitRef> refs = const [];
   List<String> remotes = const [];
   Map<String, String> remoteUrls = const {};
@@ -350,6 +397,7 @@ class RepoController extends ChangeNotifier {
       lfs.trackedChanges = await repo.usesLfs()
           ? await repo.lfsTrackedPaths(status!.changes.map((c) => c.path))
           : const {};
+      if (showWorkingFileDetails) await _refreshWorkingFileInfo();
       final diff = changesDiff;
       if (diff != null) {
         final current = status!.changes
@@ -373,6 +421,23 @@ class RepoController extends ChangeNotifier {
     } on GitException catch (e) {
       _notify('Cannot read repository status', e.message, isError: true);
     }
+  }
+
+  Future<void> _refreshWorkingFileInfo() async {
+    final result = <String, WorkingFileInfo>{};
+    for (final change in status?.changes ?? const <FileChange>[]) {
+      if (change.kind == ChangeKind.deleted) continue;
+      try {
+        final stat = await FileStat.stat('${repo.root}/${change.path}');
+        if (stat.type == FileSystemEntityType.file) {
+          result[change.path] =
+              WorkingFileInfo(size: stat.size, modified: stat.modified);
+        }
+      } on FileSystemException {
+        // A file can disappear between git status and reading its metadata.
+      }
+    }
+    workingFileInfo = result;
   }
 
   Future<void> _refreshRefs() async {

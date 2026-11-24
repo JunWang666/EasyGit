@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../git/git_repository.dart';
 import '../../git/models.dart';
 import '../../state/repo_controller.dart';
 import '../../theme/ide_theme.dart';
 import '../format.dart';
+import '../repo/operation_identity_flow.dart';
 import '../widgets/common.dart';
 import '../widgets/dialogs.dart';
 import '../widgets/menus.dart';
@@ -158,6 +160,15 @@ class _CommitPanelState extends State<CommitPanel> {
             title: 'Local Changes',
             trailing: Row(children: [
               IdeIconButton(
+                icon: Icons.info_outline,
+                tooltip: ctrl.showWorkingFileDetails
+                    ? 'Hide File Size and Modified Time'
+                    : 'Show File Size and Modified Time',
+                selected: ctrl.showWorkingFileDetails,
+                onPressed: () => ctrl
+                    .setShowWorkingFileDetails(!ctrl.showWorkingFileDetails),
+              ),
+              IdeIconButton(
                 icon: Icons.account_tree_outlined,
                 tooltip: _folderView ? 'Show Flat List' : 'Show Folder Tree',
                 selected: _folderView,
@@ -186,15 +197,20 @@ class _CommitPanelState extends State<CommitPanel> {
             ]),
           ),
           Expanded(
-            child: SplitPane(
-              axis: Axis.vertical,
-              sizeOfSecond: true,
-              initialSize: 200,
-              minSize: 120,
-              minOther: 80,
-              first: _changesTree(tracked, untracked),
-              second: _messageArea(),
-            ),
+            child: ctrl.commitMessageCollapsed
+                ? Column(children: [
+                    Expanded(child: _changesTree(tracked, untracked)),
+                    _messageArea(),
+                  ])
+                : SplitPane(
+                    axis: Axis.vertical,
+                    sizeOfSecond: true,
+                    initialSize: 200,
+                    minSize: 120,
+                    minOther: 80,
+                    first: _changesTree(tracked, untracked),
+                    second: _messageArea(),
+                  ),
           ),
         ]);
       },
@@ -353,6 +369,9 @@ class _CommitPanelState extends State<CommitPanel> {
   Widget _fileRow(FileChange f, List<FileChange> ordered,
       {int depth = 1, bool folderView = false}) {
     ordered.add(f);
+    final c = IdeColors.of(context);
+    final info = ctrl.workingFileInfo[f.path];
+    final detailStyle = TextStyle(fontSize: 11, color: c.textSecondary);
     return ListRow(
       indent: depth * 18,
       selected: _selected.contains(f.path) ||
@@ -370,6 +389,30 @@ class _CommitPanelState extends State<CommitPanel> {
                 change: f,
                 showDirectory: !folderView,
                 lfs: ctrl.lfs.isTracked(f.path))),
+        if (ctrl.showWorkingFileDetails) ...[
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 60,
+            child: Text(info == null ? '—' : formatBytes(info.size),
+                textAlign: TextAlign.right, maxLines: 1, style: detailStyle),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 112,
+            child: Tooltip(
+              message: info == null
+                  ? 'File is not present in the working tree'
+                  : formatFullDate(info.modified),
+              child: Text(
+                info == null ? '—' : formatLogDate(info.modified),
+                textAlign: TextAlign.right,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: detailStyle,
+              ),
+            ),
+          ),
+        ],
       ]),
     );
   }
@@ -392,63 +435,177 @@ class _CommitPanelState extends State<CommitPanel> {
   Widget _messageArea() {
     final c = IdeColors.of(context);
     final busy = ctrl.busy != null;
+    final collapsed = ctrl.commitMessageCollapsed;
     return Container(
-      color: c.panelBg,
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          SizedBox(
-            width: 22,
-            height: 22,
-            child: Checkbox(
-              value: ctrl.amend,
-              activeColor: c.accent,
-              onChanged: (v) => ctrl.setAmend(v ?? false),
+      decoration: BoxDecoration(
+        color: c.panelBg,
+        border: collapsed ? Border(top: BorderSide(color: c.splitter)) : null,
+      ),
+      child: Column(
+        mainAxisSize: collapsed ? MainAxisSize.min : MainAxisSize.max,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            IdeIconButton(
+              icon: collapsed ? Icons.chevron_right : Icons.expand_more,
+              tooltip: collapsed
+                  ? 'Expand Commit Message'
+                  : 'Collapse Commit Message',
+              size: 22,
+              onPressed: () => ctrl.setCommitMessageCollapsed(!collapsed),
             ),
-          ),
-          const SizedBox(width: 4),
-          GestureDetector(
-            onTap: () => ctrl.setAmend(!ctrl.amend),
-            child: const Text('Amend'),
-          ),
-        ]),
-        const SizedBox(height: 4),
-        Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-              color: c.editorBg,
-              borderRadius: BorderRadius.circular(5),
-              border: Border.all(color: c.border),
+            const SizedBox(width: 4),
+            const Expanded(
+              child: Text('Commit Message',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
             ),
-            child: TextField(
-              controller: ctrl.messageController,
-              focusNode: ctrl.messageFocus,
-              maxLines: null,
-              expands: true,
-              textAlignVertical: TextAlignVertical.top,
-              style: monoStyle(context),
-              decoration: InputDecoration(
-                hintText: 'Commit Message',
-                hintStyle: monoStyle(context, color: c.textSecondary),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.all(8),
+            SizedBox(
+              width: 22,
+              height: 22,
+              child: Checkbox(
+                value: ctrl.amend,
+                activeColor: c.accent,
+                onChanged: (v) => ctrl.setAmend(v ?? false),
               ),
+            ),
+            const SizedBox(width: 4),
+            GestureDetector(
+              onTap: () => ctrl.setAmend(!ctrl.amend),
+              child: const Text('Amend'),
+            ),
+          ]),
+          if (!collapsed) ...[
+            const SizedBox(height: 4),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: c.editorBg,
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(color: c.border),
+                ),
+                child: TextField(
+                  controller: ctrl.messageController,
+                  focusNode: ctrl.messageFocus,
+                  maxLines: null,
+                  expands: true,
+                  textAlignVertical: TextAlignVertical.top,
+                  style: monoStyle(context),
+                  decoration: InputDecoration(
+                    hintText: 'Commit Message',
+                    hintStyle: monoStyle(context, color: c.textSecondary),
+                    border: InputBorder.none,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.all(8),
+                  ),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 6, children: [
+            IdeButton(
+              label: ctrl.amend ? 'Amend Commit' : 'Commit',
+              primary: true,
+              onPressed: busy
+                  ? null
+                  : () => commitFlow(context, ctrl,
+                      identity: ctrl.selectedCommitIdentity),
+            ),
+            _identityButton(busy),
+            IdeButton(
+              label: ctrl.amend ? 'Amend and Push...' : 'Commit and Push...',
+              onPressed: busy
+                  ? null
+                  : () => commitFlow(context, ctrl,
+                      andPush: true, identity: ctrl.selectedCommitIdentity),
+            ),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  Widget _identityButton(bool busy) {
+    final c = IdeColors.of(context);
+    final identity = ctrl.selectedCommitIdentity;
+    final label =
+        identity?.name?.isNotEmpty == true ? identity!.name! : 'Set Identity';
+    final tooltip = identity == null
+        ? 'Commit identity'
+        : 'Commit identity: ${identity.name ?? '?'} <${identity.email ?? '?'}>';
+    return Builder(
+      builder: (buttonContext) => HoverBuilder(
+        cursor: busy ? MouseCursor.defer : SystemMouseCursors.click,
+        builder: (context, hovered) => GestureDetector(
+          key: const Key('commit-identity-selector'),
+          onTap: busy ? null : () => _showIdentityMenu(buttonContext),
+          child: Tooltip(
+            message: tooltip,
+            child: Container(
+              height: 28,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                color: hovered && !busy ? c.hover : Colors.transparent,
+                border: Border.all(color: c.buttonBorder),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.person_outline,
+                    size: 15, color: busy ? c.textDisabled : c.textSecondary),
+                const SizedBox(width: 5),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 120),
+                  child: Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 12, color: busy ? c.textDisabled : c.text)),
+                ),
+                const SizedBox(width: 3),
+                Icon(Icons.arrow_drop_down,
+                    size: 15, color: busy ? c.textDisabled : c.textSecondary),
+              ]),
             ),
           ),
         ),
-        const SizedBox(height: 8),
-        Wrap(spacing: 8, runSpacing: 6, children: [
-          IdeButton(
-              label: ctrl.amend ? 'Amend Commit' : 'Commit',
-              primary: true,
-              onPressed: busy ? null : () => commitFlow(context, ctrl)),
-          IdeButton(
-              label: ctrl.amend ? 'Amend and Push...' : 'Commit and Push...',
-              onPressed:
-                  busy ? null : () => commitFlow(context, ctrl, andPush: true)),
-        ]),
-      ]),
+      ),
     );
+  }
+
+  Future<void> _showIdentityMenu(BuildContext buttonContext) async {
+    final box = buttonContext.findRenderObject()! as RenderBox;
+    final position = box.localToGlobal(Offset(0, box.size.height));
+    final defaultIdentity =
+        ctrl.commitIdentity ?? await ctrl.loadCommitIdentity();
+    if (!buttonContext.mounted) return;
+    await showIdeMenu(buttonContext, position, [
+      IdeMenuItem(
+        'Default: ${defaultIdentity.name ?? 'not set'}',
+        icon: ctrl.commitIdentityOverride == null ? Icons.check : null,
+        onTap: () => ctrl.setCommitIdentityOverride(null),
+      ),
+      IdeMenuItem(
+        'Custom Identity...',
+        icon: ctrl.commitIdentityOverride == null ? null : Icons.check,
+        onTap: () => _customIdentity(defaultIdentity),
+      ),
+    ]);
+  }
+
+  Future<void> _customIdentity(RepoIdentity defaultIdentity) async {
+    final current = ctrl.selectedCommitIdentity ?? defaultIdentity;
+    final choice = await showDialog<CommitOperationChoice>(
+      context: context,
+      builder: (context) => CommitOperationDialog(
+        ctrl: ctrl,
+        identity: current,
+        andPush: false,
+        selectionOnly: true,
+      ),
+    );
+    if (choice == null) return;
+    ctrl.setCommitIdentityOverride(
+        RepoIdentity(localName: choice.name, localEmail: choice.email));
   }
 }

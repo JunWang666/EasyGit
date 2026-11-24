@@ -88,6 +88,7 @@ class _RepoSettingsViewState extends State<RepoSettingsView> {
     try {
       await ctrl.repo.setLocalIdentity(
           _ownIdentity ? name : null, _ownIdentity ? email : null);
+      await ctrl.loadCommitIdentity();
       if (_accountId != ctrl.accountId) await ctrl.setAccount(_accountId);
       if (!mounted) return;
       final previous = _identity;

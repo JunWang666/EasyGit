@@ -128,11 +128,13 @@ class CommitOperationDialog extends StatefulWidget {
     required this.ctrl,
     required this.identity,
     required this.andPush,
+    this.selectionOnly = false,
   });
 
   final RepoController ctrl;
   final RepoIdentity identity;
   final bool andPush;
+  final bool selectionOnly;
 
   @override
   State<CommitOperationDialog> createState() => _CommitOperationDialogState();
@@ -172,7 +174,11 @@ class _CommitOperationDialogState extends State<CommitOperationDialog> {
     final c = IdeColors.of(context);
     final host = _remoteHost(ctrl);
     return IdeDialog(
-      title: widget.andPush ? 'Commit and Push' : 'Commit',
+      title: widget.selectionOnly
+          ? 'Select Commit Identity'
+          : widget.andPush
+              ? 'Commit and Push'
+              : 'Commit',
       width: 560,
       content: SingleChildScrollView(
         child: Column(
@@ -183,8 +189,11 @@ class _CommitOperationDialogState extends State<CommitOperationDialog> {
                 style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 4),
             Text(
-              'Used as both author and committer for this commit only. '
-              'Repository Settings controls the default.',
+              widget.selectionOnly
+                  ? 'Used as both author and committer until you switch back to '
+                      'the repository default.'
+                  : 'Used as both author and committer for this commit only. '
+                      'Repository Settings controls the default.',
               style: TextStyle(fontSize: 12, color: c.textSecondary),
             ),
             const SizedBox(height: 10),
@@ -240,7 +249,11 @@ class _CommitOperationDialogState extends State<CommitOperationDialog> {
       actions: [
         IdeButton(label: 'Cancel', onPressed: () => Navigator.pop(context)),
         IdeButton(
-          label: widget.andPush ? 'Commit and Push' : 'Commit',
+          label: widget.selectionOnly
+              ? 'Select'
+              : widget.andPush
+                  ? 'Commit and Push'
+                  : 'Commit',
           primary: true,
           onPressed: _submit,
         ),

@@ -7,6 +7,7 @@ import 'package:easygit/hosting/hosting.dart';
 import 'package:easygit/state/accounts_store.dart';
 import 'package:easygit/state/repo_controller.dart';
 import 'package:easygit/theme/ide_theme.dart';
+import 'package:easygit/ui/commit/commit_flow.dart';
 import 'package:easygit/ui/repo/operation_identity_flow.dart';
 import 'package:easygit/ui/widgets/common.dart';
 import 'package:flutter/material.dart';
@@ -205,6 +206,52 @@ void main() {
       repo.ctrl.dispose();
       await repo.tmp.delete(recursive: true);
     }
+  });
+
+  testWidgets('selected panel identity commits without another identity dialog',
+      (tester) async {
+    late Directory tmp;
+    late String work;
+    late RepoController ctrl;
+    await tester.runAsync(() async {
+      final repo = await _repository();
+      tmp = repo.tmp;
+      work = repo.work;
+      ctrl = repo.ctrl;
+      await File('$work/a.txt').writeAsString('one\n');
+      await ctrl.refreshStatus();
+      ctrl.included.add('a.txt');
+      ctrl.messageController.text = 'panel identity';
+      ctrl.setCommitMessageCollapsed(false);
+    });
+    addTearDown(() async {
+      ctrl.dispose();
+      await tmp.delete(recursive: true).catchError((_) => tmp);
+    });
+
+    late BuildContext flowContext;
+    await tester.pumpWidget(MaterialApp(
+      theme: buildIdeTheme(Brightness.dark),
+      home: Builder(builder: (context) {
+        flowContext = context;
+        return const SizedBox();
+      }),
+    ));
+    await tester.runAsync(() => commitFlow(
+          flowContext,
+          ctrl,
+          identity: const RepoIdentity(
+            localName: 'Panel User',
+            localEmail: 'panel@example.com',
+          ),
+        ));
+    await tester.pump();
+
+    expect(find.text('Commit identity'), findsNothing);
+    final author = await tester
+        .runAsync(() => _git(work, ['log', '-1', '--format=%an <%ae>']));
+    expect(author?.trim(), 'Panel User <panel@example.com>');
+    await tester.pump(const Duration(seconds: 6));
   });
 
   test('a chosen identity replaces the author when amending', () async {
