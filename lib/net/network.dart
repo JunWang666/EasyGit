@@ -2,10 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../git/git_runner.dart';
+import '../state/secure_storage.dart';
 
 enum ProxyMode {
   /// Do nothing: git uses its own configuration and environment.
@@ -77,7 +77,7 @@ class SystemProxy {
 
 /// Proxy settings for git, git-lfs and EasyGit's own HTTP requests.
 class NetworkSettings extends ChangeNotifier {
-  static const _storage = FlutterSecureStorage();
+  static const _storage = appSecureStorage;
   static const _passwordKey = 'easygit.proxy.password';
 
   /// The settings in effect, for code without access to the instance.

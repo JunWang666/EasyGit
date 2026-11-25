@@ -195,7 +195,7 @@ class RepoController extends ChangeNotifier {
     loadCommitIdentity();
   }
 
-  final GitRepository repo;
+  final GitBackend repo;
   final AccountsStore accounts;
   final TaskCenter? tasks;
 
@@ -619,6 +619,7 @@ class RepoController extends ChangeNotifier {
       return false;
     }
     final task = tasks?.start(title, subtitle: name);
+    task?.onCancel = repo.cancel;
     _activeTask = task;
     _taskProgress = GitProgressParser();
     busy = title;
@@ -631,6 +632,11 @@ class RepoController extends ChangeNotifier {
       if (success != null) _notify(success, '');
       return true;
     } on GitException catch (e) {
+      if (e.isCancelled) {
+        if (task != null) tasks!.cancelled(task);
+        _notify('$title cancelled', '');
+        return false;
+      }
       if (task != null) tasks!.fail(task, e.message);
       _notify('$title failed', e.message, isError: true);
       return false;

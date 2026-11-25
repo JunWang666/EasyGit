@@ -1,30 +1,15 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'git_backend.dart';
 import 'git_runner.dart';
 import 'lfs.dart';
 import 'models.dart';
 
-enum ResetMode { soft, mixed, hard, keep }
-
-/// Commit author settings of a repository.
-class RepoIdentity {
-  const RepoIdentity(
-      {this.localName, this.localEmail, this.globalName, this.globalEmail});
-
-  /// Set in the repository's own config; null when it uses the global one.
-  final String? localName;
-  final String? localEmail;
-  final String? globalName;
-  final String? globalEmail;
-
-  bool get hasLocal => localName != null || localEmail != null;
-  String? get name => localName ?? globalName;
-  String? get email => localEmail ?? globalEmail;
-}
+export 'git_backend.dart' show GitBackend, RepoIdentity, ResetMode;
 
 /// High-level git operations on one repository.
-class GitRepository {
+class GitRepository implements GitBackend {
   GitRepository._(this.root, this.gitDir, this._git);
 
   /// Absolute path of the working tree root.
@@ -59,9 +44,15 @@ class GitRepository {
 
   static Future<void> init(String dir) => GitRunner(dir).run(['init']);
 
+  /// Interrupts the commands this repository is currently running.
+  void cancel() => _git.cancel();
+
   static Future<void> clone(String url, String parentDir, String folder,
-      {List<GitCredential>? credentials, void Function(String)? onProgress}) {
-    final git = GitRunner(parentDir)..credentialOverride = credentials;
+      {List<GitCredential>? credentials,
+      void Function(String)? onProgress,
+      GitRunner? runner}) {
+    final git = (runner ?? GitRunner(parentDir))
+      ..credentialOverride = credentials;
     return git.run(['clone', '--progress', url, folder],
         log: true, onStdout: onProgress, onStderr: onProgress);
   }

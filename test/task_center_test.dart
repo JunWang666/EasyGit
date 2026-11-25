@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:easygit/git/git_repository.dart';
+import 'package:easygit/git/git_runner.dart';
+import 'package:easygit/git/models.dart';
 import 'package:easygit/git/progress.dart';
 import 'package:easygit/main.dart';
 import 'package:easygit/state/accounts_store.dart';
@@ -184,4 +186,72 @@ void main() {
     );
     expect(center.activeCount, 0);
   });
+
+  test('cancel invokes the task callback and marks the task cancelled', () {
+    final center = TaskCenter();
+    final task = center.start('Fetching');
+    var calls = 0;
+    task.onCancel = () => calls++;
+
+    center.cancel(task);
+    expect(calls, 1);
+    expect(task.cancellable, isTrue);
+
+    center.cancelled(task);
+    expect(task.status, AppTaskStatus.cancelled);
+    expect(task.cancellable, isFalse);
+
+    center.cancel(task);
+    expect(calls, 1);
+  });
+
+  test('cancelling a runner kills its git process and resets afterwards',
+      () async {
+    if (Platform.isWindows) return;
+    final tmp = await Directory.systemTemp.createTemp('easygit_cancel');
+    addTearDown(() => tmp.delete(recursive: true));
+    await _installFakeGit(tmp);
+
+    final runner = GitRunner(tmp.path);
+    final running = runner.run(['status']);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    runner.cancel();
+
+    await expectLater(
+      running,
+      throwsA(isA<GitException>()
+          .having((e) => e.isCancelled, 'isCancelled', isTrue)),
+    );
+
+    GitRunner.executable = 'git';
+    final out = await runner.run(['--version']);
+    expect(out, contains('git version'));
+  });
+
+  test('cancel requested while the process is spawning still stops it',
+      () async {
+    if (Platform.isWindows) return;
+    final tmp = await Directory.systemTemp.createTemp('easygit_cancel');
+    addTearDown(() => tmp.delete(recursive: true));
+    await _installFakeGit(tmp);
+
+    final runner = GitRunner(tmp.path);
+    final running = runner.run(['status']);
+    runner.cancel();
+
+    await expectLater(
+      running,
+      throwsA(isA<GitException>()
+          .having((e) => e.isCancelled, 'isCancelled', isTrue)),
+    );
+  });
+}
+
+Future<void> _installFakeGit(Directory tmp) async {
+  final fake = File('${tmp.path}/fakegit');
+  await fake.writeAsString('#!/bin/sh\nsleep 30\n');
+  await Process.run('chmod', ['+x', fake.path]);
+  final previous = GitRunner.executable;
+  addTearDown(() => GitRunner.executable = previous);
+  GitRunner.executable = fake.path;
 }

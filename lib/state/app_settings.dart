@@ -9,6 +9,7 @@ class AppSettings extends ChangeNotifier {
   static const _ideKey = 'preferredIde';
   static const _customIdeKey = 'customIdePath';
   static const _explorerTabKey = 'explorerOpenInTab';
+  static const _backendKey = 'gitBackend';
 
   /// Repositories shown in the sidebar, in order.
   List<String> recent = [];
@@ -23,6 +24,10 @@ class AppSettings extends ChangeNotifier {
   /// of opening a new one.
   bool explorerOpenInTab = false;
 
+  /// Git implementation used for repositories: `cli` (git executable) or
+  /// `libgit2` (experimental, no subprocesses).
+  String gitBackend = 'cli';
+
   Future<void> load() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -31,6 +36,7 @@ class AppSettings extends ChangeNotifier {
       preferredIde = prefs.getString(_ideKey);
       customIdePath = prefs.getString(_customIdeKey);
       explorerOpenInTab = prefs.getBool(_explorerTabKey) ?? false;
+      gitBackend = prefs.getString(_backendKey) ?? 'cli';
       final theme = prefs.getInt(_themeKey) ?? 0;
       themeMode = ThemeMode.values[theme.clamp(0, ThemeMode.values.length - 1)];
     } catch (_) {
@@ -80,6 +86,15 @@ class AppSettings extends ChangeNotifier {
       await prefs.setString(_ideKey, id);
       final custom = customIdePath;
       if (custom != null) await prefs.setString(_customIdeKey, custom);
+    } catch (_) {}
+  }
+
+  Future<void> setGitBackend(String value) async {
+    gitBackend = value;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_backendKey, value);
     } catch (_) {}
   }
 

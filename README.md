@@ -141,6 +141,30 @@ Use `-d linux` or `-d macos` for the other desktops.
 
 The app starts `git` and reads folders you choose, so the App Sandbox is turned off in
 `macos/Runner/DebugProfile.entitlements` and `macos/Runner/Release.entitlements`.
+Those files also declare `com.apple.security.files.user-selected.read-only`, which
+`file_picker` requires even when the sandbox is off — without it every folder picker
+fails with `ENTITLEMENT_NOT_FOUND` before the panel appears.
+
+Two more platform details worth knowing:
+
+- Git credentials use the **classic macOS keychain**, not the Data Protection
+  keychain (`MacOsOptions(usesDataProtectionKeychain: false)` in
+  `lib/state/secure_storage.dart`). The Data Protection keychain needs
+  `keychain-access-groups` plus a provisioning profile; without them SecItem calls
+  fail with `errSecMissingEntitlement` (-34018). Do not re-add an empty
+  `keychain-access-groups` array either: it makes Xcode demand a development
+  certificate, so `flutter build macos --release` stops working unsigned.
+- Apps launched from Finder or the Dock inherit a minimal `PATH`, so git subprocesses
+  get `/opt/homebrew/bin` and `/usr/local/bin` appended (see `GitRunner`). That is what
+  makes a Homebrew-installed `git-lfs` work outside a terminal.
+
+Turning the sandbox **on** is not a small switch. It would additionally need
+`files.user-selected.read-write`, `network.client`, security-scoped bookmarks for the
+saved repositories (preferences currently store plain paths, which lose their access
+rights on relaunch), the Data Protection keychain with a signed
+`keychain-access-groups`, and a way to read the user's real `~/.gitconfig`, because a
+sandboxed process gets a container `HOME`. Distribute the app with Developer ID and
+notarization instead of the App Store.
 
 ### Windows
 
@@ -173,7 +197,11 @@ Folder pickers use `zenity` (or `kdialog`), so install one of them.
 The UI is touch-friendly: long-press opens context menus and the splitters can be dragged.
 iPadOS does not let apps start processes, though, so the `git` command-line backend cannot
 run there, and the welcome screen says so. Real iPad support needs a native backend, such as
-libgit2 called through `dart:ffi`, behind the same `GitRepository` API.
+libgit2 called through `dart:ffi`, behind the same `GitRepository` API. Repository folders
+would also need security-scoped bookmarks, since the iOS sandbox only grants access to
+folders the user picks for the current session. Account tokens do work there:
+`ios/Runner/Runner.entitlements` declares `keychain-access-groups`, which
+`flutter_secure_storage` requires on iOS.
 
 ## Project layout
 

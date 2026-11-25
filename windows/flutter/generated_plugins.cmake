@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   flutter_secure_storage_windows
+  git2dart_binaries
   screen_retriever_windows
   url_launcher_windows
   window_manager

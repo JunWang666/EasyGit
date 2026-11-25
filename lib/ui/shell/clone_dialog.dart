@@ -1,4 +1,3 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../hosting/hosting.dart';
@@ -7,6 +6,7 @@ import '../../theme/ide_theme.dart';
 import '../accounts/accounts_dialog.dart';
 import '../widgets/common.dart';
 import '../widgets/dialogs.dart';
+import '../widgets/pickers.dart';
 
 typedef CloneRequest = ({String url, String parent, String folder, String? accountId});
 
@@ -69,7 +69,7 @@ class _CloneDialogState extends State<_CloneDialog> {
   }
 
   Future<void> _browse() async {
-    final path = await FilePicker.getDirectoryPath(dialogTitle: 'Clone into');
+    final path = await pickDirectory(context, dialogTitle: 'Clone into');
     if (path != null) setState(() => _parent.text = path);
   }
 

@@ -37,7 +37,36 @@ class GitRunner {
   /// Path or name of the git executable.
   static String executable = 'git';
 
+  final Set<Process> _processes = {};
+  final Set<Completer<void>> _cancelSignals = {};
+  var _cancelRequested = false;
+
+  /// Kills every process this runner is currently executing. The affected
+  /// [run] calls throw a cancelled [GitException], so multi-step operations
+  /// stop at the current command. A request made while the process is still
+  /// starting takes effect as soon as it has spawned.
+  void cancel() {
+    _cancelRequested = true;
+    for (final signal in _cancelSignals) {
+      if (!signal.isCompleted) signal.complete();
+    }
+    for (final process in _processes.toList()) {
+      process.kill();
+    }
+  }
+
+  void _forget(Process process) {
+    _processes.remove(process);
+    if (_processes.isEmpty) _cancelRequested = false;
+  }
+
   static bool get isSupported => !Platform.isIOS;
+
+  /// True when running inside the macOS App Sandbox. EasyGit needs an
+  /// unsandboxed build: a sandboxed git cannot keep access to the chosen
+  /// repositories across launches and reads the container's gitconfig.
+  static bool get isSandboxed =>
+      Platform.isMacOS && Platform.environment.containsKey('APP_SANDBOX_CONTAINER_ID');
 
   /// Signed-in hosting accounts, used for network commands.
   static List<GitCredential> credentials = const [];
@@ -104,6 +133,23 @@ class GitRunner {
     'GIT_EDITOR': 'true',
   };
 
+  /// Apps launched from Finder or the Dock get a minimal PATH
+  /// (/usr/bin:/bin:/usr/sbin:/sbin), so Homebrew tools such as git-lfs are
+  /// not found there. Append the usual install locations, keeping the
+  /// inherited PATH first so an explicit choice still wins.
+  static String get _path {
+    final inherited = Platform.environment['PATH'] ?? '';
+    final extra = [
+      if (Platform.isMacOS) ...['/opt/homebrew/bin', '/usr/local/bin'],
+      if (Platform.isLinux) '/usr/local/bin',
+    ];
+    final seen = <String>{};
+    return [...inherited.split(':'), ...extra]
+        .where((p) => p.isNotEmpty)
+        .where(seen.add)
+        .join(':');
+  }
+
   /// Runs `git <args>` and returns stdout. Throws [GitException] on failure.
   ///
   /// When [log] is true the command and its output go to the Git console.
@@ -125,6 +171,9 @@ class GitRunner {
     final (credentialConfig, credentialEnv) = credentialArgs(
         args, credentialOverride ?? credentials,
         lfsCredentials: lfsCredentials);
+    // A cancellation left over from an earlier, already finished operation
+    // must not kill this new command.
+    if (_processes.isEmpty) _cancelRequested = false;
     final Process process;
     try {
       process = await Process.start(
@@ -138,7 +187,7 @@ class GitRunner {
           ...args
         ],
         workingDirectory: workDir,
-        environment: {..._env, ...networkEnv, ...credentialEnv, ...?env},
+        environment: {'PATH': _path, ..._env, ...networkEnv, ...credentialEnv, ...?env},
       );
     } on ProcessException catch (e) {
       throw GitException(
@@ -146,22 +195,24 @@ class GitRunner {
           'Unable to start git (${e.message}). Is Git installed and on PATH?',
           -1);
     }
+    _processes.add(process);
+    if (_cancelRequested) process.kill();
+    final cancelSignal = Completer<void>();
+    _cancelSignals.add(cancelSignal);
     const decoder = Utf8Decoder(allowMalformed: true);
-    final out = () async {
-      final output = StringBuffer();
+    final outBuffer = StringBuffer();
+    final outDone = () async {
       await for (final chunk in process.stdout.transform(decoder)) {
-        output.write(chunk);
+        outBuffer.write(chunk);
         onStdout?.call(chunk);
       }
-      return output.toString();
     }();
-    final err = () async {
-      final output = StringBuffer();
+    final errBuffer = StringBuffer();
+    final errDone = () async {
       await for (final chunk in process.stderr.transform(decoder)) {
-        output.write(chunk);
+        errBuffer.write(chunk);
         onStderr?.call(chunk);
       }
-      return output.toString();
     }();
     try {
       if (stdin != null) process.stdin.add(utf8.encode(stdin));
@@ -177,12 +228,21 @@ class GitRunner {
         exitCode = await process.exitCode.timeout(timeout);
       } on TimeoutException {
         process.kill();
+        _cancelSignals.remove(cancelSignal);
+        _forget(process);
         throw GitException(
             command, 'Timed out after ${timeout.inSeconds} s.', -2);
       }
     }
-    final stdout = await out;
-    final stderr = await err;
+    // A killed process can leave grandchildren holding the pipes open
+    // (ssh, git-lfs children), so a cancellation must not wait for the
+    // output streams to close.
+    await Future.any([Future.wait([outDone, errDone]), cancelSignal.future]);
+    final stdout = outBuffer.toString();
+    final stderr = errBuffer.toString();
+    _cancelSignals.remove(cancelSignal);
+    final cancelled = _cancelRequested;
+    _forget(process);
 
     if (log) {
       onLog?.call(GitCommandLog(
@@ -193,6 +253,10 @@ class GitRunner {
             .where((s) => s.isNotEmpty)
             .join('\n'),
       ));
+    }
+    if (cancelled) {
+      throw GitException(
+          command, 'Cancelled by user.', GitException.cancelledCode);
     }
     if (exitCode != 0) {
       final message = stderr.trim().isNotEmpty ? stderr.trim() : stdout.trim();

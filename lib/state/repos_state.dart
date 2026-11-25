@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 
+import '../git/git_backend.dart';
 import '../git/git_repository.dart';
+import '../git/libgit2_backend.dart';
 import '../hosting/hosting.dart';
 import '../net/network.dart';
 import 'accounts_store.dart';
@@ -61,11 +63,16 @@ class ReposState extends ChangeNotifier {
   /// Sidebar paths that could not be opened (moved or deleted).
   final List<String> missing = [];
 
+  /// Opens a repository with the implementation chosen in the settings.
+  Future<GitBackend> _openBackend(String path) => settings.gitBackend == 'libgit2'
+      ? Libgit2Backend.open(path)
+      : GitRepository.open(path);
+
   /// Opens every repository saved in the sidebar.
   Future<void> restore() async {
     for (final path in settings.recent) {
       try {
-        final ctrl = RepoController(await GitRepository.open(path), accounts,
+        final ctrl = RepoController(await _openBackend(path), accounts,
             tasks: tasks);
         repos.add(ctrl);
       } catch (_) {
@@ -87,7 +94,7 @@ class ReposState extends ChangeNotifier {
   /// Opens the repository containing [path] (throws GitException if there is
   /// none), adds it to the sidebar if needed and selects it.
   Future<RepoController> open(String path) async {
-    final repo = await GitRepository.open(path);
+    final repo = await _openBackend(path);
     final existing =
         repos.where((r) => _samePath(r.repo.root, repo.root)).firstOrNull;
     if (existing != null) {

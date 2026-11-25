@@ -1,9 +1,11 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
 
 import '../../state/app_settings.dart';
 import '../../system/open_in.dart';
+import '../widgets/pickers.dart';
 
 /// The IDE "Open in IDE" uses: the saved choice, else the first one found.
 InstalledIde? preferredIde(AppSettings s, List<InstalledIde> detected) {
@@ -16,13 +18,13 @@ InstalledIde? preferredIde(AppSettings s, List<InstalledIde> detected) {
 
 /// Asks for an editor executable. Saves it as the preferred IDE and returns
 /// it, or null if cancelled.
-Future<InstalledIde?> pickCustomIde(AppSettings settings) async {
-  final result = await FilePicker.pickFiles(
+Future<InstalledIde?> pickCustomIde(BuildContext context, AppSettings settings) async {
+  final path = await pickFile(
+    context,
     dialogTitle: 'Choose IDE executable',
     type: Platform.isWindows ? FileType.custom : FileType.any,
     allowedExtensions: Platform.isWindows ? const ['exe', 'cmd', 'bat'] : null,
   );
-  final path = result?.files.singleOrNull?.path;
   if (path == null) return null;
   await settings.setPreferredIde('custom', customPath: path);
   return customIde(path);

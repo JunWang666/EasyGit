@@ -274,6 +274,21 @@ class _EmptyState extends StatelessWidget {
                   'native git backend (for example libgit2) to open repositories.'),
             ),
           ],
+          if (GitRunner.isSandboxed) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: c.warning.withAlpha(30),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: c.warning.withAlpha(120)),
+              ),
+              child: const Text(
+                  'This build is running inside the macOS App Sandbox. EasyGit needs an '
+                  'unsandboxed build: git would lose access to your repositories on '
+                  "relaunch and read the sandbox container's gitconfig."),
+            ),
+          ],
           const SizedBox(height: 20),
           Wrap(
               spacing: 8,

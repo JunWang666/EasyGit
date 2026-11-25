@@ -16,7 +16,8 @@ enum SettingsSection {
   appearance('Appearance', Icons.palette_outlined),
   tools('External Tools', Icons.open_in_new),
   network('Network & Proxy', Icons.lan_outlined),
-  accounts('Accounts', Icons.manage_accounts_outlined);
+  accounts('Accounts', Icons.manage_accounts_outlined),
+  advanced('Advanced', Icons.science_outlined);
 
   const SettingsSection(this.label, this.icon);
 
@@ -137,7 +138,43 @@ class _SettingsPageState extends State<SettingsPage> {
         SettingsSection.tools => _ToolsSettings(settings: widget.repos.settings),
         SettingsSection.network => NetworkSettingsPanel(repos: widget.repos),
         SettingsSection.accounts => AccountsPanel(store: widget.repos.accounts),
+        SettingsSection.advanced => _AdvancedSettings(settings: widget.repos.settings),
       };
+}
+
+class _AdvancedSettings extends StatelessWidget {
+  const _AdvancedSettings({required this.settings});
+
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = IdeColors.of(context);
+    return ListenableBuilder(
+      listenable: settings,
+      builder: (context, _) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const _GroupLabel('Git backend'),
+        for (final (value, label) in const [
+          ('cli', 'Git command line (default)'),
+          ('libgit2', 'libgit2 (experimental, no git executable required)'),
+        ])
+          _OptionRow(
+            radio: true,
+            selected: settings.gitBackend == value,
+            title: label,
+            onTap: () => settings.setGitBackend(value),
+          ),
+        const SizedBox(height: 10),
+        Text(
+          'libgit2 is experimental: opening repositories, local changes, branches and '
+          'history work without the git executable, including on iOS. Other operations '
+          'are not ported yet and report an error. Clone still uses the command line. '
+          'Repositories already open keep their backend until they are reopened.',
+          style: TextStyle(fontSize: 12, color: c.textSecondary),
+        ),
+      ]),
+    );
+  }
 }
 
 class _AppearanceSettings extends StatelessWidget {
@@ -247,7 +284,7 @@ class _ToolsSettingsState extends State<_ToolsSettings> {
             ),
           const SizedBox(height: 10),
           Row(children: [
-            IdeButton(label: 'Choose Other...', onPressed: () => pickCustomIde(settings)),
+            IdeButton(label: 'Choose Other...', onPressed: () => pickCustomIde(context, settings)),
             const SizedBox(width: 8),
             IdeButton(
                 label: 'Rescan', onPressed: _ides == null ? null : () => _detect(refresh: true)),

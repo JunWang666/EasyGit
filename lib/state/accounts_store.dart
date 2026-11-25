@@ -1,11 +1,11 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../git/git_runner.dart';
 import '../hosting/hosting.dart';
+import 'secure_storage.dart';
 
 /// Signed-in GitHub / GitLab / Gitea accounts.
 ///
@@ -13,7 +13,7 @@ import '../hosting/hosting.dart';
 /// secure store (Credential Manager, Keychain or libsecret).
 class AccountsStore extends ChangeNotifier {
   static const _accountsKey = 'hostingAccounts';
-  static const _storage = FlutterSecureStorage();
+  static const _storage = appSecureStorage;
 
   List<HostingAccount> accounts = const [];
   final Map<String, String> _tokens = {};

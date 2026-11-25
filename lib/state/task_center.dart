@@ -2,7 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../git/progress.dart';
 
-enum AppTaskStatus { running, succeeded, failed }
+enum AppTaskStatus { running, succeeded, failed, cancelled }
 
 class AppTask {
   AppTask(this.id, this.title, this.subtitle) : startedAt = DateTime.now();
@@ -16,7 +16,12 @@ class AppTask {
   GitProgress? progress;
   String? error;
 
+  /// Invoked when the user asks to cancel the task; null when the operation
+  /// cannot be interrupted.
+  void Function()? onCancel;
+
   bool get running => status == AppTaskStatus.running;
+  bool get cancellable => running && onCancel != null;
 }
 
 /// Background operations across every open repository, including clones that
@@ -61,6 +66,15 @@ class TaskCenter extends ChangeNotifier {
     task.error = error;
     _finish(task, AppTaskStatus.failed);
   }
+
+  /// Asks the operation to stop. The task leaves the running state when the
+  /// operation reports back (see [cancelled]), not when this is called.
+  void cancel(AppTask task) {
+    if (!task.cancellable) return;
+    task.onCancel!();
+  }
+
+  void cancelled(AppTask task) => _finish(task, AppTaskStatus.cancelled);
 
   void _finish(AppTask task, AppTaskStatus status) {
     if (!task.running) return;

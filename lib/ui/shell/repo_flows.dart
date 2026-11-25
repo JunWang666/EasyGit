@@ -1,14 +1,15 @@
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../git/git_repository.dart';
+import '../../git/git_runner.dart';
 import '../../git/models.dart';
 import '../../git/progress.dart';
 import '../../state/repos_state.dart';
 import 'clone_dialog.dart';
 import '../widgets/dialogs.dart';
+import '../widgets/pickers.dart';
 
 /// Adds the repository at [path] to the sidebar, offering `git init` when the
 /// folder is not a repository yet.
@@ -138,8 +139,7 @@ Future<List<String>> findRepositoriesBelow(String dir,
 }
 
 Future<void> openRepositoryFlow(BuildContext context, ReposState repos) async {
-  final path =
-      await FilePicker.getDirectoryPath(dialogTitle: 'Open Git Repository');
+  final path = await pickDirectory(context, dialogTitle: 'Open Git Repository');
   if (path != null && context.mounted)
     await openRepositoryAt(context, repos, path);
 }
@@ -154,6 +154,8 @@ Future<void> cloneRepositoryFlow(BuildContext context, ReposState repos,
       .firstOrNull;
   final task =
       repos.tasks.start('Cloning ${request.folder}', subtitle: request.url);
+  final runner = GitRunner(request.parent);
+  task.onCancel = runner.cancel;
   final parser = GitProgressParser();
   GitException? error;
   try {
@@ -164,6 +166,7 @@ Future<void> cloneRepositoryFlow(BuildContext context, ReposState repos,
       credentials: account == null
           ? null
           : repos.accounts.credentialsPreferring(account),
+      runner: runner,
       onProgress: (chunk) {
         for (final progress in parser.feed(chunk)) {
           repos.tasks.update(task, progress);
@@ -172,6 +175,10 @@ Future<void> cloneRepositoryFlow(BuildContext context, ReposState repos,
     );
     repos.tasks.succeed(task);
   } on GitException catch (e) {
+    if (e.isCancelled) {
+      repos.tasks.cancelled(task);
+      return;
+    }
     error = e;
     repos.tasks.fail(task, e.message);
   } catch (e) {

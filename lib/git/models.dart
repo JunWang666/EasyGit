@@ -224,9 +224,14 @@ class RepoStatus {
 class GitException implements Exception {
   const GitException(this.command, this.message, [this.exitCode = 1]);
 
+  /// Exit code used when the user cancelled the operation.
+  static const cancelledCode = -3;
+
   final String command;
   final String message;
   final int exitCode;
+
+  bool get isCancelled => exitCode == cancelledCode;
 
   @override
   String toString() => message;

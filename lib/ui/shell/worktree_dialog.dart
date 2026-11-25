@@ -1,4 +1,3 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../git/models.dart';
@@ -7,6 +6,7 @@ import '../../state/repos_state.dart';
 import '../../theme/ide_theme.dart';
 import '../widgets/common.dart';
 import '../widgets/dialogs.dart';
+import '../widgets/pickers.dart';
 
 typedef WorktreeRequest = ({String path, String commitish, String? newBranch, bool open});
 
@@ -68,7 +68,7 @@ class _AddWorktreeDialogState extends State<_AddWorktreeDialog> {
   }
 
   Future<void> _browse() async {
-    final dir = await FilePicker.getDirectoryPath(dialogTitle: 'Worktree location');
+    final dir = await pickDirectory(context, dialogTitle: 'Worktree location');
     if (dir == null) return;
     setState(() {
       _pathEdited = true;

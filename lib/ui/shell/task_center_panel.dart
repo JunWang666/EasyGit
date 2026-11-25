@@ -104,6 +104,8 @@ class _TaskRow extends StatelessWidget {
               Icon(Icons.check_circle_outline, size: 18, color: c.success),
             AppTaskStatus.failed =>
               Icon(Icons.error_outline, size: 18, color: c.error),
+            AppTaskStatus.cancelled =>
+              Icon(Icons.cancel_outlined, size: 18, color: c.textSecondary),
           },
         ),
         const SizedBox(width: 8),
@@ -153,7 +155,9 @@ class _TaskRow extends StatelessWidget {
               Text(
                 task.status == AppTaskStatus.failed
                     ? (task.error ?? 'Failed')
-                    : 'Completed${_elapsed(elapsed)}',
+                    : task.status == AppTaskStatus.cancelled
+                        ? 'Cancelled'
+                        : 'Completed${_elapsed(elapsed)}',
                 maxLines: task.status == AppTaskStatus.failed ? 3 : 1,
                 overflow: TextOverflow.ellipsis,
                 style: secondary.copyWith(
@@ -163,6 +167,14 @@ class _TaskRow extends StatelessWidget {
               ),
           ]),
         ),
+        if (task.cancellable)
+          IdeIconButton(
+            icon: Icons.close,
+            tooltip: 'Cancel task',
+            size: 22,
+            iconSize: 14,
+            onPressed: () => tasks.cancel(task),
+          ),
         if (!task.running)
           IdeIconButton(
             icon: Icons.close,

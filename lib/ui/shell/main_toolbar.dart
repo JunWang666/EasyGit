@@ -324,7 +324,7 @@ class _OpenInIdeButtonState extends State<_OpenInIdeButton> {
   }
 
   Future<void> _chooseOther() async {
-    final ide = await pickCustomIde(widget.settings);
+    final ide = await pickCustomIde(context, widget.settings);
     if (ide != null) await _open(ide);
   }
 

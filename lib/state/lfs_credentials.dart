@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../git/git_runner.dart';
+import 'secure_storage.dart';
 
 /// Credentials for one repository's LFS server.
 ///
@@ -55,7 +56,7 @@ class LfsCredential {
 /// repository. The token never reaches `.git/config` or any file in the
 /// repository.
 class LfsCredentialStore {
-  const LfsCredentialStore([this._storage = const FlutterSecureStorage()]);
+  const LfsCredentialStore([this._storage = appSecureStorage]);
 
   final FlutterSecureStorage _storage;
 
