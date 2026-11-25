@@ -3,7 +3,7 @@
 ; Then compile: ISCC.exe windows\installer\easygit.iss
 
 #define AppName "EasyGit"
-#define AppVersion "0.3.1"
+#define AppVersion "0.3.2"
 #define AppExe "easygit.exe"
 #define ReleaseDir "..\..\build\windows\x64\runner\Release"
 
