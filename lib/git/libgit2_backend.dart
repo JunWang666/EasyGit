@@ -1,6 +1,10 @@
+import 'dart:ffi';
 import 'dart:io';
+import 'dart:isolate';
 
+import 'package:ffi/ffi.dart';
 import 'package:git2dart/git2dart.dart' hide GitCredential;
+import 'package:git2dart_binaries/git2dart_binaries.dart' as native;
 
 import 'git_backend.dart';
 import 'git_runner.dart';
@@ -25,6 +29,10 @@ class Libgit2Backend implements GitBackend {
 
   /// Opens the repository that contains [dir].
   static Future<Libgit2Backend> open(String dir) async {
+    if (Platform.isMacOS) {
+      // libgit2 ships its own OpenSSL, which does not use the system keychain.
+      Libgit2.setSSLCertLocations(file: '/etc/ssl/cert.pem');
+    }
     try {
       final gitDir = Repository.discover(startPath: dir);
       return Libgit2Backend._(Repository.open(gitDir));
@@ -42,17 +50,34 @@ class Libgit2Backend implements GitBackend {
   String get name =>
       root.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).lastOrNull ?? root;
 
+  List<GitCredential>? _credentialOverride;
+  // Kept for parity with the CLI backend; LFS itself is not ported yet.
+  // ignore: unused_field
+  List<GitCredential> _lfsCredentials = const [];
+
   @override
   set onLog(void Function(GitCommandLog log)? callback) {}
 
   @override
-  set credentialOverride(List<GitCredential>? value) {}
+  set credentialOverride(List<GitCredential>? value) {
+    _credentialOverride = value;
+  }
 
   @override
-  set lfsCredentials(List<GitCredential> value) {}
+  set lfsCredentials(List<GitCredential> value) {
+    _lfsCredentials = value;
+  }
 
   @override
-  void cancel() {}
+  void cancel() {
+    _remoteCancelled = true;
+    for (final receive in _remoteReceives.toList()) {
+      receive.close();
+    }
+    for (final isolate in _remoteIsolates.toList()) {
+      isolate.kill();
+    }
+  }
 
   File _file(String path) => File('$root/$path');
 
@@ -78,7 +103,7 @@ class Libgit2Backend implements GitBackend {
 
   @override
   Future<RepoStatus> status() async {
-    final statusEntries = await _statusWithUntracked();
+    final statusEntries = _rawStatus();
     final changes = <FileChange>[];
     for (final entry in statusEntries.entries) {
       final flags = entry.value;
@@ -131,26 +156,44 @@ class Libgit2Backend implements GitBackend {
     );
   }
 
-  /// libgit2's default status options do not include untracked files, so the
-  /// working tree is walked as well and new files are probed individually.
-  Future<Map<String, Set<GitStatus>>> _statusWithUntracked() async {
-    final map = Map<String, Set<GitStatus>>.of(_repo.status);
-    await _collectUntracked(Directory(root), map);
-    return map;
-  }
-
-  Future<void> _collectUntracked(
-      Directory dir, Map<String, Set<GitStatus>> map) async {
-    await for (final entity in dir.list(followLinks: false)) {
-      final rel = entity.path.substring(root.length + 1).replaceAll('\\', '/');
-      if (rel == '.git' || rel.startsWith('.git/')) continue;
-      if (entity is Directory) {
-        await _collectUntracked(entity, map);
-      } else if (entity is File && !map.containsKey(rel)) {
-        final flags = _repo.statusFile(rel);
-        if (flags.contains(GitStatus.wtNew)) map[rel] = {GitStatus.wtNew};
+  /// Status including untracked files, collected by libgit2 in one pass with
+  /// the untracked flags enabled (its defaults omit them).
+  Map<String, Set<GitStatus>> _rawStatus() {
+    return using((arena) {
+      final opts = arena<native.git_status_options>();
+      native.libgit2Runtime.bindings.git_status_options_init(
+          opts, native.GIT_STATUS_OPTIONS_VERSION);
+      opts.ref.flags = native.git_status_opt_t.GIT_STATUS_OPT_INCLUDE_UNTRACKED.value |
+          native.git_status_opt_t.GIT_STATUS_OPT_RECURSE_UNTRACKED_DIRS.value;
+      final out = arena<Pointer<native.git_status_list>>();
+      // ignore: invalid_use_of_internal_member
+      final error = native.libgit2Runtime.bindings.git_status_list_new(out, _repo.pointer, opts);
+      if (error < 0) throw StateError('git_status_list_new failed: $error');
+      final list = out.value;
+      try {
+        final result = <String, Set<GitStatus>>{};
+        final count = native.libgit2Runtime.bindings.git_status_list_entrycount(list);
+        for (var i = 0; i < count; i++) {
+          final entry =
+              native.libgit2Runtime.bindings.git_status_byindex(list, i);
+          var delta = entry.ref.index_to_workdir;
+          if (entry.ref.head_to_index != nullptr) {
+            delta = entry.ref.head_to_index;
+          }
+          final path =
+              (delta.ref.flags & native.git_delta_t.GIT_DELTA_RENAMED.value) != 0
+                  ? delta.ref.new_file.path.cast<Utf8>().toDartString()
+                  : delta.ref.old_file.path.cast<Utf8>().toDartString();
+          result[path] = GitStatus.values
+              .skip(1)
+              .where((e) => (entry.ref.statusAsInt & e.value) != 0)
+              .toSet();
+        }
+        return result;
+      } finally {
+        native.libgit2Runtime.bindings.git_status_list_free(list);
       }
-    }
+    });
   }
 
   ChangeKind _changeKind(Set<GitStatus> flags) {    if (flags.contains(GitStatus.conflicted)) return ChangeKind.conflicted;
@@ -191,6 +234,8 @@ class Libgit2Backend implements GitBackend {
     for (final type in [GitBranch.local, GitBranch.remote]) {
       for (final branch in Branch.list(repo: _repo, type: type)) {
         final isLocal = type == GitBranch.local;
+        // origin/HEAD is a symbolic ref with no direct target OID.
+        if (!isLocal && branch.name.endsWith('/HEAD')) continue;
         final fullName = isLocal
             ? 'refs/heads/${branch.name}'
             : 'refs/remotes/${branch.name}';
@@ -264,7 +309,7 @@ class Libgit2Backend implements GitBackend {
       return Reference.nameToId(repo: _repo, refName: rev);
     }
     for (final candidate
-        in ['refs/heads/\$rev', 'refs/remotes/\$rev', 'refs/tags/\$rev']) {
+        in ['refs/heads/$rev', 'refs/remotes/$rev', 'refs/tags/$rev']) {
       try {
         return Reference.nameToId(repo: _repo, refName: candidate);
       } catch (_) {
@@ -305,7 +350,7 @@ class Libgit2Backend implements GitBackend {
         );
       }).toList();
     } catch (e) {
-      throw GitException('git log', '\$e');
+      throw GitException('git log', '$e');
     }
   }
 
@@ -360,15 +405,78 @@ class Libgit2Backend implements GitBackend {
 
   @override
   Future<void> commit(String message, List<FileChange> files,
-          {bool amend = false, String? authorName, String? authorEmail}) async =>
-      _unsupported('commit');
+      {bool amend = false, String? authorName, String? authorEmail}) async {
+    final index = _repo.index;
+    final head = Commit.lookup(repo: _repo, oid: _resolve('HEAD'));
+    // Start from HEAD and apply only the selected files, matching
+    // `git commit --only`: everything else in the working tree is left alone.
+    index.readTree(head.tree);
+    for (final change in files) {
+      if (change.kind == ChangeKind.deleted) {
+        index.remove(change.path);
+      } else {
+        index.add(change.path);
+      }
+    }
+    final tree = Tree.lookup(repo: _repo, oid: index.writeTree());
+    final signature = await _signature(authorName, authorEmail);
+    final parents = amend
+        ? [for (final parent in head.parents)
+            Commit.lookup(repo: _repo, oid: parent)]
+        : [head];
+    Commit.create(
+      repo: _repo,
+      updateRef: 'HEAD',
+      author: signature,
+      committer: signature,
+      message: message,
+      tree: tree,
+      parents: parents,
+    );
+    index.write();
+  }
+
+  Future<Signature> _signature(String? name, String? email) async {
+    if (name != null && email != null) {
+      return Signature.create(name: name, email: email);
+    }
+    final id = await identity();
+    return Signature.create(
+      name: name ?? id.name ?? 'EasyGit',
+      email: email ?? id.email ?? 'easygit@localhost',
+    );
+  }
 
   @override
-  Future<void> rollback(List<FileChange> files) async =>
-      _unsupported('rollback');
+  Future<void> rollback(List<FileChange> files) async {
+    for (final change in files) {
+      if (change.isUntracked) {
+        await deleteWorkingFile(change.path);
+        continue;
+      }
+      try {
+        final commit = Commit.lookup(repo: _repo, oid: _resolve('HEAD'));
+        final blob = Blob.lookup(repo: _repo, oid: commit.tree[change.path].oid);
+        if (blob.isBinary) {
+          await _file(change.path).writeAsBytes(blob.contentBytes);
+        } else {
+          await _file(change.path).writeAsString(blob.content);
+        }
+      } catch (_) {
+        // The file did not exist in HEAD, so rolling back removes it.
+        await deleteWorkingFile(change.path);
+      }
+    }
+  }
 
   @override
-  Future<void> addToVcs(List<String> paths) async => _unsupported('addToVcs');
+  Future<void> addToVcs(List<String> paths) async {
+    final index = _repo.index;
+    for (final path in paths) {
+      index.add(path);
+    }
+    index.write();
+  }
 
   @override
   Future<void> stash(String message) async => _unsupported('stash');
@@ -403,21 +511,126 @@ class Libgit2Backend implements GitBackend {
   Future<void> pruneWorktrees() async => _unsupported('pruneWorktrees');
 
   @override
-  Future<void> fetch({void Function(String)? onProgress}) async =>
-      _unsupported('fetch');
+  Future<void> fetch({void Function(String)? onProgress}) async {
+    for (final name in await remotes()) {
+      await _runRemote(name, const [], false, true, onProgress);
+    }
+  }
 
   @override
   Future<void> pull({bool rebase = false, void Function(String)? onProgress}) async =>
       _unsupported('pull');
 
   @override
-  Future<void> push({bool force = false, void Function(String)? onProgress}) async =>
-      _unsupported('push');
+  Future<void> push({bool force = false, void Function(String)? onProgress}) async {
+    final st = await status();
+    final branch = st.branch;
+    if (branch == null) {
+      throw const GitException('git push', 'Cannot push: HEAD is detached.');
+    }
+    final upstream = st.upstream;
+    final remoteName = upstream == null
+        ? await _defaultRemoteName()
+        : upstream.substring(0, upstream.indexOf('/'));
+    final target = upstream == null ? branch : upstream.substring(remoteName.length + 1);
+    await _pushRef(
+      remoteName,
+      'refs/heads/$branch:refs/heads/$target',
+      force: force,
+      onProgress: onProgress,
+    );
+    if (upstream == null) {
+      Branch.lookup(repo: _repo, name: branch).setUpstream('$remoteName/$branch');
+    }
+  }
 
   @override
   Future<void> pushBranch(GitRef ref,
-          {void Function(String)? onProgress}) async =>
-      _unsupported('pushBranch');
+      {void Function(String)? onProgress}) async {
+    final upstream = ref.upstream;
+    final remoteName = upstream == null || !upstream.contains('/')
+        ? await _defaultRemoteName()
+        : upstream.substring(0, upstream.indexOf('/'));
+    final target = upstream == null || !upstream.contains('/')
+        ? ref.name
+        : upstream.substring(upstream.indexOf('/') + 1);
+    await _pushRef(remoteName, 'refs/heads/${ref.name}:refs/heads/$target',
+        onProgress: onProgress);
+    if (upstream == null) {
+      Branch.lookup(repo: _repo, name: ref.name)
+          .setUpstream('$remoteName/${ref.name}');
+    }
+  }
+
+  Future<void> _pushRef(String remoteName, String refspec,
+      {bool force = false, void Function(String)? onProgress}) async {
+    await _runRemote(
+        remoteName, [if (force) '+$refspec' else refspec], true, false, onProgress);
+  }
+
+  Future<String> _defaultRemoteName() async {
+    final all = await remotes();
+    if (all.isEmpty) {
+      throw const GitException('git push', 'No remote is configured.');
+    }
+    return all.contains('origin') ? 'origin' : all.first;
+  }
+
+  final Set<Isolate> _remoteIsolates = {};
+  final Set<ReceivePort> _remoteReceives = {};
+  var _remoteCancelled = false;
+
+  /// Runs one remote operation in a background isolate. libgit2 calls are
+  /// synchronous, so doing them on the UI isolate would freeze the window for
+  /// the whole network round trip. Progress text is forwarded to [onProgress].
+  Future<void> _runRemote(String remoteName, List<String> refspecs, bool push,
+      bool prune, void Function(String)? onProgress) async {
+    _remoteCancelled = false;
+    final receive = ReceivePort();
+    final job = <String, Object?>{
+      'sendPort': receive.sendPort,
+      'root': root,
+      'remoteName': remoteName,
+      'refspecs': refspecs,
+      'push': push,
+      'prune': prune,
+      'credentials': [
+        for (final c in _credentialOverride ?? GitRunner.credentials)
+          [c.server, c.username, c.password],
+      ],
+    };
+    final isolate = await Isolate.spawn(_remoteEntry, job);
+    _remoteIsolates.add(isolate);
+    _remoteReceives.add(receive);
+    try {
+      await for (final message in receive) {
+        if (message is! List || message.length != 2) continue;
+        switch (message[0]) {
+          case 'progress':
+            onProgress?.call(message[1] as String);
+          case 'done':
+            return;
+          case 'error':
+            throw GitException(push ? 'git push' : 'git fetch', '${message[1]}');
+        }
+      }
+      if (_remoteCancelled) {
+        throw GitException(push ? 'git push' : 'git fetch', 'Cancelled by user.',
+            GitException.cancelledCode);
+      }
+    } finally {
+      _remoteIsolates.remove(isolate);
+      _remoteReceives.remove(receive);
+      receive.close();
+      isolate.kill();
+    }
+  }
+
+  static String _formatBytes(int bytes) {
+    if (bytes >= 1 << 20) return '${(bytes / (1 << 20)).toStringAsFixed(2)} MiB';
+    if (bytes >= 1 << 10) return '${(bytes / (1 << 10)).toStringAsFixed(1)} KiB';
+    return '$bytes B';
+  }
 
   @override
   Future<RepoIdentity> identity() async {
@@ -593,4 +806,64 @@ class Libgit2Backend implements GitBackend {
   @override
   Future<String?> remoteDefaultBranch(String remote) async =>
       _unsupported('remoteDefaultBranch');
+}
+
+/// Entry point of the background isolate used for remote operations.
+void _remoteEntry(Map<String, Object?> job) {
+  final send = job['sendPort'] as SendPort;
+  void emit(String text) => send.send(['progress', text]);
+  try {
+    if (Platform.isMacOS) {
+      Libgit2.setSSLCertLocations(file: '/etc/ssl/cert.pem');
+    }
+    final repo = Repository.open(job['root'] as String);
+    final remote = Remote.lookup(repo: repo, name: job['remoteName'] as String);
+    final callbacks = _workerCallbacks(remote.url, job['credentials'], emit);
+    final refspecs = (job['refspecs'] as List).cast<String>();
+    if (job['push'] as bool) {
+      remote.push(refspecs: refspecs, callbacks: callbacks);
+    } else {
+      remote.fetch(prune: GitFetchPrune.prune, callbacks: callbacks);
+    }
+    send.send(['done', '']);
+  } catch (e) {
+    send.send(['error', '$e']);
+  }
+}
+
+Callbacks _workerCallbacks(
+    String url, Object? credentials, void Function(String) emit) {
+  UserPass? credential;
+  for (final c in (credentials as List).cast<List>()) {
+    final server = c[0] as String;
+    if (url.startsWith(server)) {
+      credential = UserPass(username: c[1] as String, password: c[2] as String);
+      break;
+    }
+  }
+  final watch = Stopwatch()..start();
+  var lastBytes = 0;
+  var lastMillis = 0;
+  return Callbacks(
+    credentials: credential,
+    sidebandProgress: (message, len, payload) => emit(message),
+    transferProgress: (stats) {
+      final total = stats.totalObjects;
+      final received = stats.receivedObjects;
+      final percent = total == 0 ? 0 : (received * 100) ~/ total;
+      final bytes = stats.receivedBytes;
+      final millis = watch.elapsedMilliseconds;
+      var text = 'Receiving objects: $percent% ($received/$total)';
+      if (bytes > 0) {
+        final elapsed = millis - lastMillis;
+        final speed =
+            elapsed <= 0 ? 0 : ((bytes - lastBytes) * 1000) ~/ elapsed;
+        text +=
+            ', ${Libgit2Backend._formatBytes(bytes)} | ${Libgit2Backend._formatBytes(speed)}/s';
+      }
+      lastBytes = bytes;
+      lastMillis = millis;
+      emit(text);
+    },
+  );
 }

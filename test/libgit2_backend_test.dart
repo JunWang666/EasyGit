@@ -54,4 +54,72 @@ void main() {
     expect(await native.readWorkingFile('new.txt'), 'new\n');
     expect(native.name, cli.name);
   });
+
+  test('libgit2 backend fetches and pushes against a local remote', () async {
+    final tmp = await Directory.systemTemp.createTemp('easygit_remote');
+    addTearDown(() => tmp.delete(recursive: true));
+    final bare = '${tmp.path}/bare.git';
+    await git(tmp.path, ['init', '--bare', bare]);
+
+    final seed = '${tmp.path}/seed';
+    await git(tmp.path, ['clone', bare, seed]);
+    await git(seed, ['config', 'user.email', 'test@example.com']);
+    await git(seed, ['config', 'user.name', 'Test']);
+    await File('$seed/a.txt').writeAsString('one\n');
+    await git(seed, ['add', '.']);
+    await git(seed, ['commit', '-m', 'first']);
+    await git(seed, ['push', '-u', 'origin', 'HEAD:master']);
+
+    final other = '${tmp.path}/other';
+    await git(tmp.path, ['clone', bare, other]);
+    final backend = await Libgit2Backend.open(other);
+    await backend.fetch();
+    expect((await backend.log(branch: 'origin/master')).map((c) => c.subject),
+        contains('first'));
+
+    await File('$seed/a.txt').writeAsString('one\ntwo\n');
+    await git(seed, ['commit', '-am', 'second']);
+    await git(seed, ['push', '-u', 'origin', 'HEAD:master']);
+    await backend.fetch();
+    expect((await backend.log(branch: 'origin/master')).first.subject, 'second');
+
+    await git(other, ['config', 'user.email', 'test@example.com']);
+    await git(other, ['config', 'user.name', 'Test']);
+    await File('$other/b.txt').writeAsString('b\n');
+    await git(other, ['add', '.']);
+    await git(other, ['commit', '-m', 'from libgit2']);
+    await backend.push();
+    final bareLog = await Process.run('git', ['log', '--format=%s', '-1'],
+        workingDirectory: bare);
+    expect(bareLog.stdout.toString().trim(), 'from libgit2');
+  });
+
+  test('libgit2 backend commits only the selected files', () async {
+    final tmp = await Directory.systemTemp.createTemp('easygit_commit');
+    addTearDown(() => tmp.delete(recursive: true));
+    await git(tmp.path, ['init', '-b', 'master']);
+    await git(tmp.path, ['config', 'user.email', 'test@example.com']);
+    await git(tmp.path, ['config', 'user.name', 'Test']);
+    await File('${tmp.path}/a.txt').writeAsString('one\n');
+    await git(tmp.path, ['add', '.']);
+    await git(tmp.path, ['commit', '-m', 'first']);
+    await File('${tmp.path}/a.txt').writeAsString('one\ntwo\n');
+    await File('${tmp.path}/b.txt').writeAsString('b\n');
+
+    final backend = await Libgit2Backend.open(tmp.path);
+    final status = await backend.status();
+    final a = status.changes.firstWhere((c) => c.path == 'a.txt');
+    await backend.commit('change a', [a]);
+
+    final log = await backend.log();
+    expect(log.first.subject, 'change a');
+    expect(log.first.author, 'Test');
+
+    final after = await backend.status();
+    expect(after.changes.map((c) => c.path), ['b.txt']);
+    final head = await Process.run('git', ['show', '--stat', '--format=', 'HEAD'],
+        workingDirectory: tmp.path);
+    expect(head.stdout.toString(), contains('a.txt'));
+    expect(head.stdout.toString(), isNot(contains('b.txt')));
+  });
 }
